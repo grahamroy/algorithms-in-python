@@ -307,9 +307,10 @@ The algorithms change. The principles do not.
 
 ## The complete code
 
-The full script is in `linear_regression.py` in this folder. It runs both the from-scratch
-implementation and the scikit-learn version, prints all metrics, and produces a two-panel
-visualisation saved as `linear_regression_results.png`.
+The full script is on GitHub: [**linear_regression.py**](https://github.com/grahamroy/algorithms-in-python/blob/main/01-supervised-learning/01-linear-regression/linear_regression.py)
+
+It runs both the from-scratch implementation and the scikit-learn version, prints all
+metrics, and produces a two-panel visualisation saved as `linear_regression_results.png`.
 
 Run it with:
 
@@ -317,6 +318,8 @@ Run it with:
 pip install numpy matplotlib scikit-learn
 python linear_regression.py
 ```
+
+The full repository for this series is at [github.com/grahamroy/algorithms-in-python](https://github.com/grahamroy/algorithms-in-python).
 
 ---
 
