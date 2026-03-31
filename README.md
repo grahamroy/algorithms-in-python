@@ -12,6 +12,19 @@ clear explanations and Python implementations.
 
 ## Series Structure
 
+### 00 — Foundations: Data Structures for AI
+| # | Topic | Why it matters | Status |
+|---|-------|----------------|--------|
+| 1 | Arrays | The basic container — NumPy arrays underpin all numerical computation | ⬜ |
+| 2 | Matrices | Linear algebra's workhorse — weight matrices, transformations, covariance | ⬜ |
+| 3 | Tensors | Generalised matrices — the data format of deep learning (PyTorch, TensorFlow) | ⬜ |
+| 4 | Linked Lists | Sequential access — used in memory management and streaming data pipelines | ⬜ |
+| 5 | Graphs | Nodes and edges — social networks, knowledge bases, GNNs, spectral clustering | ⬜ |
+| 6 | Hash Tables | O(1) lookup — feature hashing, caching, deduplication, count-min sketches | ⬜ |
+| 7 | Queues | FIFO ordering — BFS, experience replay in RL, message passing, job scheduling | ⬜ |
+| 8 | Trees | Hierarchical structure — decision trees, random forests, KD-trees, B-trees | ⬜ |
+| 9 | Knowledge Graphs | Structured relational data — entity embeddings, reasoning, RAG systems | ⬜ |
+
 ### 01 — Supervised Learning
 | # | Algorithm | Status |
 |---|-----------|--------|
@@ -116,9 +129,10 @@ clear explanations and Python implementations.
 | 5 | Quantum Boltzmann Machine | ⬜ |
 | 6 | Quantum Genetic Algorithms | ⬜ |
 
-### 00 — Series Overviews
+### Series Overviews
 | Article | Status |
 |---------|--------|
+| Foundations: Data Structures Overview | ⬜ |
 | Supervised Learning Overview | ⬜ |
 | Advanced Supervised Learning Overview | ⬜ |
 | Unsupervised Learning Overview | ⬜ |
@@ -135,4 +149,4 @@ clear explanations and Python implementations.
 
 ---
 
-**Total: 57 algorithm articles + 12 category overviews + 1 master overview = 70 articles**
+**Total: 66 articles (9 foundations + 57 algorithms) + 13 category overviews + 1 master overview = 80 articles**
