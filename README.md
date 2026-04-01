@@ -15,7 +15,7 @@ clear explanations and Python implementations.
 ### 00 — Foundations: Data Structures for AI
 | # | Topic | Why it matters | Status |
 |---|-------|----------------|--------|
-| 1 | Arrays | The basic container — NumPy arrays underpin all numerical computation | ⬜ |
+| 1 | Arrays | The basic container — NumPy arrays underpin all numerical computation | ✅ |
 | 2 | Matrices | Linear algebra's workhorse — weight matrices, transformations, covariance | ⬜ |
 | 3 | Tensors | Generalised matrices — the data format of deep learning (PyTorch, TensorFlow) | ⬜ |
 | 4 | Linked Lists | Sequential access — used in memory management and streaming data pipelines | ⬜ |
