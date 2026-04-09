@@ -28,7 +28,7 @@ special case:
 - A **matrix** is a rank-2 tensor — a 2D array, shape `(m, n)`
 - An **image** is a rank-3 tensor — height × width × channels, shape `(H, W, C)`
 - A **batch of images** is a rank-4 tensor — shape `(N, H, W, C)`
-- A **video** is a rank-5 tensor — batch × frames × height × width × channels
+- A **video** is a rank-5 tensor — shape `(N, T, H, W, C)`
 
 The rank is just the number of dimensions. Nothing fundamentally changes when you go
 from 2 to 3 to 5 — the structure is the same, there are just more axes to track.
@@ -205,8 +205,9 @@ output = X @ W    # (4, 10, 4) — the same W applied to every element of the ba
 weight matrix `W` is automatically applied to every `(seq_len, d_model)` slice in
 the batch.
 
-**CNN weight tensors.** A convolutional layer's weights are a 4D tensor:
-`(out_channels, in_channels, kernel_height, kernel_width)`.
+**CNN weight tensors.** A convolutional layer's weights are a 4D tensor. In PyTorch's
+"channels-first" convention, the shape is
+`(out_channels, in_channels, kernel_height, kernel_width)`:
 
 ```python
 conv_weights = np.random.randn(64, 3, 3, 3)
@@ -214,6 +215,10 @@ conv_weights = np.random.randn(64, 3, 3, 3)
 # 3 input channels (RGB)
 # 3×3 spatial kernel
 ```
+
+(TensorFlow/Keras uses a "channels-last" layout —
+`(kernel_h, kernel_w, in_channels, out_channels)` — but the total number of
+parameters is the same.)
 
 Training a CNN means updating these 64 × 3 × 3 × 3 = 1,728 numbers so that the
 learned filters respond to meaningful patterns — edges, curves, textures. The tensor
