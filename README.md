@@ -19,8 +19,8 @@ clear explanations and Python implementations.
 | 2 | Matrices | Linear algebra's workhorse — weight matrices, transformations, covariance | ✅ |
 | 3 | Tensors | Generalised matrices — the data format of deep learning (PyTorch, TensorFlow) | ✅ |
 | 4 | Linked Lists | Sequential access — used in memory management and streaming data pipelines | ✅ |
-| 5 | Graphs | Nodes and edges — social networks, knowledge bases, GNNs, spectral clustering | ⬜ |
-| 6 | Hash Tables | O(1) lookup — feature hashing, caching, deduplication, count-min sketches | ⬜ |
+| 5 | Graphs | Nodes and edges — social networks, knowledge bases, GNNs, spectral clustering | ✅ |
+| 6 | Hash Tables | O(1) lookup — feature hashing, caching, deduplication, count-min sketches | ✅ |
 | 7 | Queues | FIFO ordering — BFS, experience replay in RL, message passing, job scheduling | ⬜ |
 | 8 | Trees | Hierarchical structure — decision trees, random forests, KD-trees, B-trees | ⬜ |
 | 9 | Knowledge Graphs | Structured relational data — entity embeddings, reasoning, RAG systems | ⬜ |
