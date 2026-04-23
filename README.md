@@ -22,7 +22,7 @@ clear explanations and Python implementations.
 | 5 | Graphs | Nodes and edges — social networks, knowledge bases, GNNs, spectral clustering | ✅ |
 | 6 | Hash Tables | O(1) lookup — feature hashing, caching, deduplication, count-min sketches | ✅ |
 | 7 | Queues | FIFO ordering — BFS, experience replay in RL, message passing, job scheduling | ✅ |
-| 8 | Trees | Hierarchical structure — decision trees, random forests, KD-trees, B-trees | ⬜ |
+| 8 | Trees | Hierarchical structure — decision trees, random forests, KD-trees, B-trees | ✅ |
 | 9 | Knowledge Graphs | Structured relational data — entity embeddings, reasoning, RAG systems | ⬜ |
 
 ### 01 — Supervised Learning
