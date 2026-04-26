@@ -25,8 +25,8 @@ clear explanations and Python implementations.
 | 8 | Trees | Hierarchical structure — decision trees, random forests, KD-trees, B-trees | ✅ |
 | 9 | Knowledge Graphs | Structured relational data — entity embeddings, reasoning, RAG systems | ✅ |
 | 10 | Probabilistic Data Structures | Bloom filters, Count-Min Sketch, HyperLogLog — sublinear memory at the cost of bounded error | ✅ |
-| 11 | Sparse Matrices | CSR / CSC / COO — TF-IDF, recommender systems, GNN adjacency, sparse autoencoders | ⬜ |
-| 12 | Vector Indexes (ANN) | HNSW, IVF, PQ, LSH — vector databases, RAG, FAISS / Pinecone / Chroma | ⬜ |
+| 11 | Sparse Matrices | CSR / CSC / COO — TF-IDF, recommender systems, GNN adjacency, sparse autoencoders | ✅ |
+| 12 | Vector Indexes (ANN) | HNSW, IVF, PQ, LSH — vector databases, RAG, FAISS / Pinecone / Chroma | ✅ |
 
 ### 01 — Supervised Learning
 | # | Algorithm | Status |
