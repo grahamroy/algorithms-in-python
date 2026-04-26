@@ -1,0 +1,344 @@
+<p>In Part 2 we treated matrices as dense rectangular arrays of numbers
+— the mental model NumPy gives you and the one most linear algebra
+courses teach. That model is correct, and it is also a trap. Most of
+the matrices in modern ML are not dense. A typical TF-IDF matrix on
+a million-document corpus has 99.99% zeros. A user-item recommender
+matrix at any real platform is over 99.9% empty. A graph adjacency
+matrix for a billion-node knowledge graph is so sparse the dense
+representation does not fit on Earth's hard drives, let alone in
+RAM.</p>
+<p>This article is about the data structures that exploit that
+sparsity. They are not exotic — they are the substrate of
+scikit-learn's text features, every recommender system that ever
+shipped, every graph neural network in PyTorch Geometric and DGL,
+and the sparse-attention mechanisms that let modern transformers
+handle long contexts without their memory exploding. Three formats
+do most of the work — <strong>COO</strong>, <strong>CSR</strong>, and <strong>CSC</strong> — and knowing
+which one fits which job is the difference between an ML pipeline
+that runs and one that gets killed by the OOM reaper.</p>
+<p>We will build one of each in <code>scipy.sparse</code>, time them against the
+dense equivalent on a real benchmark, and end with a TF-IDF demo
+showing why sparse is the default representation for any text
+pipeline at scale.</p>
+<hr />
+<h2>What "sparse" actually means</h2>
+<p>A matrix is <strong>sparse</strong> when most of its entries are zero. The
+quantity that matters is the <strong>number of non-zeros</strong>, written
+<code>nnz</code>. For an <code>m × n</code> matrix:</p>
+<pre><code>density = nnz / (m · n)
+</code></pre>
+<p>A matrix with <code>density &lt; 0.01</code> (less than 1% non-zero) is
+universally considered sparse. In practice the matrices that benefit
+from sparse representations are far sparser than that — TF-IDF,
+recommender, and graph matrices typically run at <code>density &lt; 0.001</code>.</p>
+<p>The dense storage cost is always <code>O(m · n)</code> regardless of how many
+zeros you have. Sparse storage is <code>O(nnz)</code> — proportional only to
+the <em>non</em>-zeros. For a million-document TF-IDF matrix with a
+50,000-word vocabulary at 0.1% density, those numbers are:</p>
+<pre><code>Dense  : 1,000,000 × 50,000 × 8 bytes  =  400 GB
+Sparse : 50,000,000 × ~16 bytes        =  ~800 MB
+</code></pre>
+<p>Three orders of magnitude. The dense version does not fit anywhere;
+the sparse version fits on a phone. That gap is the entire reason
+the formats in this article exist.</p>
+<hr />
+<h2>COO — the format you build in</h2>
+<p>The simplest sparse format is <strong>Coordinate List</strong> (COO). Three
+parallel arrays:</p>
+<pre><code>rows = [0, 0, 1, 2, 2, 3]     ← row index of each non-zero
+cols = [0, 3, 2, 1, 4, 0]     ← column index of each non-zero
+data = [5, 7, 9, 2, 8, 1]     ← the values
+</code></pre>
+<p>Together they describe the non-zero entries of a 4×5 matrix:</p>
+<pre><code>        col 0  col 1  col 2  col 3  col 4
+row 0 [   5      .      .      7      .  ]
+row 1 [   .      .      9      .      .  ]
+row 2 [   .      2      .      .      8  ]
+row 3 [   1      .      .      .      .  ]
+</code></pre>
+<p>Building a COO matrix is <code>O(1)</code> per non-zero — just append to the
+three arrays. That makes COO the format you <em>construct</em> in: when
+you are reading a sparse dataset out of a file, scraping pairs from
+some upstream source, or accumulating triples from a stream, COO is
+the right intermediate representation.</p>
+<p>The catch is that <em>querying</em> a COO matrix is slow. To find all
+non-zeros in row 2, you scan the entire <code>rows</code> array looking for
+<code>2</code>. That is <code>O(nnz)</code> per row lookup, and useless for any operation
+that walks the matrix structure repeatedly.</p>
+<p>In <code>scipy.sparse</code>, COO is the format used to read in MatrixMarket
+files, to add new entries in batch, and as the input to most "build
+a sparse matrix" constructors. After construction you almost always
+convert to CSR or CSC for the actual computation.</p>
+<hr />
+<h2>CSR — the format you compute in</h2>
+<p><strong>Compressed Sparse Row</strong> (CSR) is the workhorse. Three arrays again,
+but laid out so that all non-zeros for a given row are contiguous in
+memory.</p>
+<pre><code>indptr  = [0, 2, 3, 5, 6]     ← row i's non-zeros live in
+                                indices[indptr[i] : indptr[i+1]]
+indices = [0, 3, 2, 1, 4, 0]  ← column index of each non-zero
+data    = [5, 7, 9, 2, 8, 1]  ← the values
+</code></pre>
+<p>The same 4×5 matrix encoded differently. <code>indptr[i]</code> is the start
+position of row <code>i</code>'s entries in the <code>indices</code> and <code>data</code> arrays;
+<code>indptr[i+1]</code> is where they end. Row 2's non-zeros are at positions
+3 to 5, which gives <code>indices[3:5] = [1, 4]</code> and <code>data[3:5] = [2, 8]</code>
+— column 1 has value 2, column 4 has value 8. The <code>indptr</code> array has
+length <code>m + 1</code>, so the total storage is still <code>O(nnz + m)</code>.</p>
+<p>CSR has two properties that make it the default for compute:</p>
+<p><strong>Fast row slicing.</strong> Getting all entries of row <code>i</code> is
+<code>O(nnz_in_row_i)</code> — read a contiguous slice of <code>indices</code> and
+<code>data</code>. No scan of the whole matrix.</p>
+<p><strong>Fast sparse matrix-vector multiplication (SpMV).</strong> The most
+common operation on a sparse matrix is multiplying it by a dense
+vector — <code>y = A @ x</code>. With CSR you walk the rows in order, and for
+each row you read its non-zero columns from <code>indices</code>, look up the
+corresponding entries of <code>x</code>, multiply by <code>data</code>, and sum. The
+inner loop is cache-friendly because <code>indices</code> and <code>data</code> are
+contiguous, and the only random-access pattern is the lookups into
+<code>x</code> — and even those are bounded by <code>nnz_in_row</code> per row.</p>
+<p>The companion script benchmarks SpMV on a 50,000 × 50,000 matrix
+at 0.1% density (2.5 million non-zeros) against the dense
+equivalent and shows where sparse wins:</p>
+<pre><code>Large benchmark: 50,000 x 50,000 matrix, 0.1% density (2.5M nnz)
+  Dense storage  :   19,073.49 MB  (would not fit -- skipped)
+  Sparse storage :       28.79 MB
+  Sparse SpMV    :        3.38 ms
+
+Smaller benchmark: 5,000 x 5,000 matrix, 1.0% density
+  Dense storage  :      190.73 MB
+  Sparse storage :        2.87 MB
+
+  Dense  SpMV    :        3.08 ms
+  Sparse SpMV    :        0.21 ms
+  Sparse speedup :       14.5x
+</code></pre>
+<p>At 1% density on a small matrix the sparse version is already
+fourteen times faster. At 0.1% density on a large matrix the dense
+version is 19 GB — it simply does not exist in any practical sense
+— and that is the regime real ML pipelines actually live in.</p>
+<hr />
+<h2>CSC — the format you slice columns with</h2>
+<p><strong>Compressed Sparse Column</strong> (CSC) is CSR's mirror image. Same
+three-array layout, but indexed by column instead of row:</p>
+<pre><code>indptr  = [0, 2, 3, 4, 5, 6]  ← column j's non-zeros live in
+                                indices[indptr[j] : indptr[j+1]]
+indices = [0, 3, 2, 1, 0, 2]  ← row index of each non-zero
+data    = [5, 1, 2, 9, 7, 8]  ← the values
+</code></pre>
+<p>CSC gives you fast column slicing and fast multiplication of
+<code>A^T @ x</code> — the column-oriented mirror of CSR's row-oriented
+strengths. It is the right format when your computation walks
+columns more than rows: certain optimisation solvers, some
+implementations of LASSO and coordinate descent, and a few
+graph-partitioning algorithms.</p>
+<p>The trade-off between CSR and CSC is the same as the trade-off
+between row-major and column-major dense layouts: choose the one
+whose dominant access pattern matches your algorithm. Most ML code
+ends up using CSR because the dominant operation is "row of
+features × weight vector" or "row of one-hot embedding × weight
+matrix," both of which are row-walks.</p>
+<p><code>scipy.sparse</code> lets you convert between formats in linear time, so
+you can build in COO and switch to CSR or CSC at the boundary
+between construction and computation.</p>
+<hr />
+<h2>Three other formats worth knowing</h2>
+<p><code>scipy.sparse</code> ships seven formats. Three more are worth a passing
+mention:</p>
+<p><strong>LIL</strong> (List of Lists) — one Python list per row of (column,
+value) pairs. Easy to mutate one entry at a time, useful when you
+are filling a sparse matrix incrementally with random-access writes.
+Painfully slow for everything else; convert to CSR before any
+computation.</p>
+<p><strong>DOK</strong> (Dictionary of Keys) — a <code>dict</code> keyed on <code>(row, col)</code>
+tuples. Same use case as LIL — building a sparse matrix one cell at
+a time when you do not know the structure in advance. Internally
+just a Python dict, with all the overhead that entails.</p>
+<p><strong>BSR</strong> (Block Sparse Row) — CSR but each "non-zero" is a small
+dense block instead of a single value. Useful when your sparsity
+pattern has natural block structure, e.g. block-diagonal Hessians
+in optimisation, or factor graphs in probabilistic ML. A niche but
+beautiful structure when it fits.</p>
+<p>In practice, 95% of ML code paths use CSR. A handful of
+construction-heavy pipelines use COO or LIL as a staging ground.
+CSC shows up in solvers. The other formats are tools for narrower
+problems.</p>
+<hr />
+<h2>TF-IDF — the canonical sparse matrix in ML</h2>
+<p>The classical use case for sparse matrices in ML is <strong>TF-IDF
+vectorisation</strong> of text. Tokenise a corpus, compute term-frequency
+(TF) and inverse-document-frequency (IDF), and store the result as
+a <code>documents × vocabulary</code> matrix where each entry is the TF-IDF
+weight of one term in one document.</p>
+<p>For any non-trivial corpus, that matrix is overwhelmingly zero. A
+1,000-document corpus over a 10,000-word vocabulary has 10 million
+<em>possible</em> entries; if the average document contains 200 distinct
+terms, only 200,000 of them are non-zero. That is 2% density, and
+already worth a sparse representation. Real corpora — Wikipedia,
+Common Crawl, an enterprise document store — typically run an order
+of magnitude sparser.</p>
+<p>The companion script builds a small TF-IDF matrix from scratch and
+reports the density:</p>
+<pre><code>TF-IDF: 101 documents over a 570-word vocabulary
+
+  Shape           : (101, 570)
+  Non-zeros       : 974
+  Density         : 1.69%
+  Memory (sparse) :  11.8 KB
+  Memory (dense)  : 449.8 KB
+  Ratio           :  38.1x smaller
+</code></pre>
+<p>A 38× memory saving on a hundred-document toy corpus, and the
+saving grows linearly with corpus size and vocabulary growth.
+scikit-learn's <code>TfidfVectorizer</code> returns a CSR matrix by default
+for exactly this reason — you can fit it on a million documents on
+a laptop.</p>
+<p>The same shape powers every recommender's user-item matrix (sparse
+because most users have rated almost no items), every GNN's
+adjacency matrix (sparse because most nodes are not directly
+connected), and every sparse autoencoder's hidden-layer activations
+(sparse by L1 regularisation on the activations).</p>
+<hr />
+<h2>The dense-vs-sparse crossover</h2>
+<p>A natural question: at what density does sparse become the wrong
+choice? The answer depends on the operation, but a useful rule of
+thumb for SpMV is:</p>
+<pre><code>Sparse storage cost  ≈  3 × nnz × 8 bytes   (data + indices + indptr)
+Dense storage cost   ≈  m × n × 8 bytes
+</code></pre>
+<p>Sparse is cheaper on memory whenever <code>3 · nnz &lt; m · n</code>, i.e.
+density below roughly 33%. For computation, the crossover is
+narrower — sparse SpMV has more overhead per non-zero than dense
+matrix-vector multiplication, so the dense version is faster up to
+densities of about 1-10% depending on hardware. Below that, sparse
+wins on both axes.</p>
+<p>The practical heuristic: if your density is below 1%, use sparse.
+If it is above 30%, use dense. Between those two, profile both on
+your actual data and your actual operation, because the answer
+depends on cache behaviour and BLAS implementation.</p>
+<hr />
+<h2>Big-O and memory summary</h2>
+<p>[[BIG-O TABLE IMAGE]]</p>
+<p>The thing to read off this table is the asymmetry. Construction is
+fastest in COO and LIL (the formats designed for it); computation
+is fastest in CSR and CSC (the formats designed for it). The
+<code>scipy.sparse</code> library makes the conversion cheap, so the canonical
+ML pipeline is <em>build in COO, convert to CSR, compute in CSR</em>. Any
+attempt to compute directly on a COO or LIL matrix will be slow.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>Sparse matrices are the unsung backbone of a huge slice of the ML
+stack.</p>
+<p><strong>TF-IDF and bag-of-words.</strong> Every classical NLP pipeline before
+deep learning ran on a sparse term-document matrix. They still do,
+inside any pipeline that uses TF-IDF as a baseline or as a feature
+for a tree-based model. scikit-learn's <code>CountVectorizer</code>,
+<code>HashingVectorizer</code>, and <code>TfidfVectorizer</code> all return CSR.</p>
+<p><strong>Recommender systems.</strong> The user-item rating matrix at Spotify,
+Netflix, Amazon, Pinterest, or any platform with millions of users
+and items is sparse — most users have rated a vanishingly small
+fraction of available items. Matrix factorisation (SVD, ALS),
+neural collaborative filtering, and modern two-tower retrieval all
+start from a sparse rating matrix and learn dense embeddings on top.</p>
+<p><strong>Graph adjacency matrices in GNNs.</strong> PyTorch Geometric and DGL
+represent graph adjacency as sparse matrices, because for any
+graph with bounded degree the adjacency is overwhelmingly empty.
+Message passing — the core operation of a GNN layer — is sparse
+matrix multiplication: aggregate features from neighbours by
+multiplying the sparse adjacency matrix by the dense feature matrix.
+The whole field would be infeasible without sparse SpMV.</p>
+<p><strong>Sparse attention in long-context transformers.</strong> Vanilla
+attention is <code>O(n²)</code> in sequence length, and that quadratic cost is
+the reason long-context LLMs are hard. <strong>Sparse attention</strong> patterns
+— Longformer, BigBird, sparse Mixture-of-Experts routing — represent
+the attention matrix as a sparse mask, multiplied lazily by the
+keys and values. The matrix never gets materialised at full
+density. Every modern long-context transformer ships with some form
+of sparse attention under the hood.</p>
+<p><strong>One-hot encodings and feature hashing.</strong> A categorical feature
+with thousands of levels expanded to one-hot is a column of vectors
+each with a single non-zero. The natural representation is sparse,
+and scikit-learn returns sparse matrices from <code>OneHotEncoder</code> and
+<code>HashingVectorizer</code> for exactly this reason. The downstream linear
+model (logistic regression, linear SVM) has sparse-aware code paths
+that are an order of magnitude faster than the dense equivalent.</p>
+<p><strong>Sparse autoencoders for interpretability.</strong> Anthropic's and
+OpenAI's recent interpretability work on LLMs uses sparse
+autoencoders to decompose dense neural network activations into a
+sparse basis of interpretable features. The sparsity is enforced by
+an L1 penalty during training; the result is a sparse activation
+matrix where most features are zero on most inputs. Reading the
+non-zeros tells you what the network is "thinking" — a structural
+trick that is conceptually identical to factorising a TF-IDF matrix.</p>
+<p><strong>Solvers in classical ML.</strong> The kernel matrix in an SVM, the
+Hessian in second-order optimisation, the design matrix in LASSO
+regression — all sparse for typical workloads. scikit-learn's
+LASSO, ridge, and SVM solvers all have CSR-aware paths. The
+quadratic-programming solvers behind support vector machines are
+implementations of the same family of sparse-matrix algorithms that
+power CFD and finite-element analysis.</p>
+<hr />
+<h2>When NOT to use sparse</h2>
+<p>Sparse representations are powerful but not free.</p>
+<p><strong>When the matrix is actually dense.</strong> The sparse formats add
+per-non-zero overhead — index storage, irregular memory access. A
+matrix that is 20% non-zero is not really sparse, and the dense
+representation will be both smaller (no index overhead) and faster
+(BLAS, vectorisation, cache locality). Density above ~30% means
+dense.</p>
+<p><strong>When you need random-access writes.</strong> CSR and CSC are
+read-optimised. Setting a single entry — <code>A[i, j] = v</code> — requires
+shifting the <code>indices</code> and <code>data</code> arrays of the affected row or
+column, which is <code>O(nnz_in_row)</code> per write. If your access pattern
+is random-write, build in LIL or DOK instead, then convert.</p>
+<p><strong>When you need many element-wise operations on the structure.</strong>
+Sparse element-wise multiplication preserves sparsity, but
+element-wise <em>addition</em> of a dense scalar destroys it (every zero
+becomes that scalar). The same goes for element-wise functions like
+<code>exp</code> or <code>log</code>. Beware of any operation that turns a zero into a
+non-zero.</p>
+<p><strong>When the matrix-vector product cost dwindles compared to other
+work.</strong> SpMV is fast, but the constant factor is meaningfully
+larger than dense BLAS. If your matrix is small enough to fit
+densely and SpMV is not the bottleneck, the simpler representation
+wins. This often comes up in middle-sized neural network layers
+(say, 4096 × 4096) where dense is universally faster despite the
+weights being mostly small.</p>
+<p><strong>When you cannot guarantee the sparsity pattern.</strong> If the matrix
+<em>could</em> fill up at runtime — say, a recommender's rating matrix as
+a power user adds hundreds of ratings — you might end up with a
+nominally-sparse matrix that has become dense in practice. The
+conversion overhead and the failure mode are nasty. Either cap the
+sparsity (truncate per-user ratings) or use a hybrid representation
+that can switch.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Eleven foundations down, one to go. Part 12 is <strong>Vector Indexes
+(ANN)</strong> — HNSW, IVF, PQ, and LSH. The structures inside FAISS,
+Pinecone, Chroma, and every modern RAG retriever, picking up where
+this article and Part 10 leave off on the dense-vs-sparse and
+exact-vs-probabilistic trade-offs.</p>
+<p>After Part 12 the foundations are complete. The first algorithm
+article is <strong>linear regression</strong> — and it returns to the matrix
+algebra of Parts 1 and 2 with everything we have learned about
+storage, sparsity, and scale layered on top.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/00-foundations/11-sparse-matrices/sparse_matrices.py"><strong>sparse_matrices.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">python sparse_matrices.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scipy</code> — the only two non-stdlib
+dependencies in this whole foundations track, and the only ones any
+serious ML project ships without. The script builds a small COO
+matrix and converts to CSR, benchmarks sparse SpMV against the
+dense equivalent at the 1%-density crossover, and ends with a
+TF-IDF demo on a hundred-document toy corpus showing the resulting
+CSR matrix's density and memory footprint. The headline numbers
+worth pinning to the wall: <strong>~15× SpMV speedup at 1% density</strong>,
+<strong>~660× memory reduction on a 50,000² matrix at 0.1% density</strong>,
+and <strong>TF-IDF matrices that fit on a phone where the dense
+equivalent would crush a workstation</strong>.</p>
+<hr />
+<p><em>This is Part 11 of the Algorithms in Python series, Foundations track. The companion script <code>sparse_matrices.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/@grahamjroy/probabilistic-data-structures-trading-exactness-for-sublinear-memory-410e07b57cb6">Part 10</a> covered probabilistic data structures. Part 12 — the final foundation — will look at vector indexes for approximate nearest-neighbour search: HNSW, IVF, PQ, and LSH, the structures inside every modern RAG retriever.</em></p>
