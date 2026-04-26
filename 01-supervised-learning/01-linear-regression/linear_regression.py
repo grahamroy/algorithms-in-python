@@ -1,15 +1,27 @@
 """
-Linear Regression — From Scratch and with Scikit-learn
+Linear Regression --- From Scratch and with Scikit-learn
 
 This script demonstrates linear regression in two ways:
 1. Implementing the algorithm from scratch using the Normal Equation
 2. Using scikit-learn's LinearRegression for the same task
 
-Both approaches find the line of best fit: y = b₀ + b₁x
-where b₀ is the intercept and b₁ is the slope.
+Both approaches find the line of best fit: y = b0 + b1*x
+where b0 is the intercept and b1 is the slope.
 """
 
+import sys
+
+# Force UTF-8 stdout so Unicode characters (e.g. mathematical symbols) print
+# correctly on Windows consoles that default to cp1252.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import numpy as np
+import matplotlib
+
+# Use a non-interactive backend so the script saves the plot and exits
+# without trying to open a window (works the same in headless and CLI runs).
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
@@ -111,6 +123,6 @@ ax2.grid(True, alpha=0.3)
 
 plt.tight_layout()
 plt.savefig('linear_regression_results.png', dpi=150, bbox_inches='tight')
-plt.show()
+plt.close()
 
 print("\nPlot saved to linear_regression_results.png")

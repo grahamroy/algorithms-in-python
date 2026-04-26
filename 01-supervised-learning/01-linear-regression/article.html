@@ -1,0 +1,286 @@
+<p>Every machine learning journey starts in the same place: a scatter of data points on a
+chart, and a question. <em>Is there a pattern here?</em> If someone told you that house prices
+tend to rise with square footage, you would instinctively reach for a ruler and try to
+draw a straight line through the cloud. That instinct — fitting a line to data — is
+linear regression. It is the simplest algorithm in machine learning, and also one of the
+most important.</p>
+<p>Linear regression does not just draw the line. It draws the <em>best</em> line — the one that
+minimises the total error between its predictions and the actual data. The mathematics
+behind it are clean and elegant, and the Python implementation takes just a few lines of
+code. But there is more going on beneath the surface than most introductions reveal, and
+understanding what "best" actually means will change how you think about every algorithm
+that comes after it.</p>
+<p>This article builds linear regression from the ground up. We will start with the
+intuition, derive the mathematics, implement it from scratch in Python, then do it
+again with scikit-learn. By the end, you will understand not just <em>how</em> to use linear
+regression, but <em>why</em> it works.</p>
+<p>This is the first algorithm article in the series, sitting on top of the twelve
+<a href="https://github.com/grahamroy/algorithms-in-python">Foundations articles</a> that came
+before it. We will lean explicitly on <strong>arrays</strong> (Part 1), <strong>matrices</strong> (Part 2), and
+<strong>sparse matrices</strong> (Part 11) where the algorithm uses them — those data structures
+are exactly what makes the linear-algebra steps below work at scale.</p>
+<hr />
+<h2>The idea: one equation, two unknowns</h2>
+<p>At its core, linear regression fits a straight line to a set of data points. The
+equation for that line is:</p>
+<blockquote>
+<p>ŷ = b₀ + b₁x</p>
+</blockquote>
+<p>where <strong>x</strong> is the input (the feature), <strong>ŷ</strong> is the prediction, <strong>b₀</strong> is the
+y-intercept (where the line crosses the vertical axis), and <strong>b₁</strong> is the slope (how
+much ŷ changes when x increases by one unit).</p>
+<p>The job of the algorithm is to find the values of b₀ and b₁ that make the line fit the
+data as closely as possible. "As closely as possible" needs a precise definition, and
+that is where the cost function comes in.</p>
+<hr />
+<h2>The cost function: what "best" means</h2>
+<p>Given a set of data points, any line will make errors — it will predict values that are
+above some points and below others. The question is which line makes the <em>smallest</em>
+total error.</p>
+<p>Linear regression uses the <strong>Mean Squared Error</strong> (MSE) as its cost function:</p>
+<blockquote>
+<p>MSE = (1/n) × Σ (yᵢ − ŷᵢ)²</p>
+</blockquote>
+<p>For each data point, take the difference between the actual value y and the predicted
+value ŷ, square it, and average across all points. Squaring does two things: it makes
+all errors positive (so negatives do not cancel out positives), and it penalises large
+errors more heavily than small ones.</p>
+<p>The best line is the one that minimises this number. Every other line — tilted a little
+steeper, shifted a little higher — produces a larger MSE.</p>
+<hr />
+<h2>The Normal Equation: solving it in one step</h2>
+<p>One of the elegant things about linear regression is that the optimal parameters can be
+found in a single calculation. There is no iteration, no "learning rate", no gradient
+descent (we will meet those later in this series). The solution is a closed-form
+equation called the <strong>Normal Equation</strong>:</p>
+<blockquote>
+<p>θ = (Xᵀ X)⁻¹ Xᵀ y</p>
+</blockquote>
+<p>where <strong>X</strong> is the matrix of input features (with a column of ones prepended for the
+intercept), <strong>y</strong> is the vector of target values, and <strong>θ</strong> is the vector of optimal
+parameters [b₀, b₁].</p>
+<p>What this equation says: project the target values onto the column space of X, and find
+the parameters that make the projection exact. If that sounds abstract, the code makes
+it concrete. The whole calculation is the matrix algebra from
+<a href="https://medium.com/@grahamjroy/matrices-the-language-machine-learning-thinks-in-eb42b854a805">Foundations Part 2 — Matrices</a>
+wired together: a transpose, two multiplications, and an inverse, applied to numpy
+arrays of the kind introduced in
+<a href="https://medium.com/@grahamjroy/arrays-where-every-algorithm-begins-9893bbc7d517">Foundations Part 1 — Arrays</a>.</p>
+<p>When the design matrix is <em>sparse</em> — TF-IDF features, one-hot-encoded categories,
+graph adjacency — the same equation has a much faster sparse solver, covered in
+<a href="https://medium.com/@grahamjroy/sparse-matrices-when-most-of-your-data-is-zero-85cebc669d78">Foundations Part 11 — Sparse Matrices</a>.
+Computing <code>np.linalg.inv(X.T @ X)</code> on a million-row sparse design matrix would be
+catastrophic; <code>scipy.sparse.linalg.lsqr</code> does the same job in seconds.</p>
+<hr />
+<h2>Step 1: Generate synthetic data</h2>
+<p>We start by creating data with a <em>known</em> linear relationship. This is a powerful
+learning technique: because we choose the true parameters ourselves, we can check
+whether the algorithm recovers them.</p>
+<pre><code class="language-python">import numpy as np
+
+np.random.seed(42)
+X = 2 * np.random.rand(100, 1)            # 100 values between 0 and 2
+y = 3 + 4 * X + np.random.randn(100, 1)   # y = 3 + 4x + noise
+</code></pre>
+<p>The true intercept is 3, the true slope is 4, and we have added Gaussian noise to
+simulate real-world messiness. The algorithm's job is to look at these 100 noisy points
+and figure out that the underlying relationship is approximately y = 3 + 4x.</p>
+<hr />
+<h2>Step 2: Split into training and test sets</h2>
+<p>This is the single most important habit in machine learning. We never evaluate a model
+on the same data we trained it on. That would be like marking your own exam — you would
+always score well, but it would not tell you whether you actually understand the
+material.</p>
+<pre><code class="language-python">from sklearn.model_selection import train_test_split
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+</code></pre>
+<p>We reserve 20% of the data (20 points) as a test set that the model never sees during
+training. When we evaluate later, we use these held-out points to measure how well the
+model generalises to new data.</p>
+<hr />
+<h2>Step 3: Implement it from scratch</h2>
+<p>Here is the Normal Equation in Python. We add a column of ones to X (for the intercept
+term), then apply the formula directly:</p>
+<pre><code class="language-python">X_train_b = np.c_[np.ones((len(X_train), 1)), X_train]  # add bias column
+theta = np.linalg.inv(X_train_b.T @ X_train_b) @ X_train_b.T @ y_train
+
+intercept = theta[0][0]
+slope = theta[1][0]
+</code></pre>
+<p>That is the entire algorithm — three lines of linear algebra. The <code>@</code> operator is
+matrix multiplication, <code>.T</code> is transpose, and <code>np.linalg.inv</code> computes the inverse.
+The result is a vector θ containing the intercept and slope.</p>
+<p>With the seed and data above, this gives:</p>
+<pre><code>Intercept (b₀): 3.1429
+Slope (b₁):     3.7993
+</code></pre>
+<p>Close to the true values of 3 and 4. The small discrepancy is the noise — with only
+80 training points and random variation, the estimate will never be exact. But it is
+remarkably close.</p>
+<hr />
+<h2>Step 4: Do it with scikit-learn</h2>
+<p>Scikit-learn wraps the same mathematics in a clean API. The result should be identical
+(or nearly so — scikit-learn uses numerical optimisations for stability):</p>
+<pre><code class="language-python">from sklearn.linear_model import LinearRegression
+
+model = LinearRegression()
+model.fit(X_train, y_train)
+
+print(model.intercept_[0])   # b₀
+print(model.coef_[0][0])     # b₁
+</code></pre>
+<p>Two lines to create and train the model. The <code>fit()</code> method does all the work —
+computing the optimal intercept and slope from the training data. The parameters are
+stored in <code>model.intercept_</code> and <code>model.coef_</code>.</p>
+<hr />
+<h2>Step 5: Evaluate on the test set</h2>
+<p>Now the critical question: how well does the model perform on data it has never seen?</p>
+<pre><code class="language-python">from sklearn.metrics import mean_squared_error, r2_score
+
+y_pred = model.predict(X_test)
+
+mse = mean_squared_error(y_test, y_pred)
+rmse = np.sqrt(mse)
+r2 = r2_score(y_test, y_pred)
+</code></pre>
+<p><strong>Mean Squared Error (MSE)</strong> tells you the average squared prediction error. Lower is
+better, but the number is hard to interpret on its own because it is in squared units.</p>
+<p><strong>Root Mean Squared Error (RMSE)</strong> is the square root of MSE — it is in the same units
+as y, making it easier to understand. An RMSE of 1.05 means the model's predictions
+are off by about 1.05 units on average.</p>
+<p><strong>R² Score</strong> is the proportion of variance in y that the model explains. An R² of 0.89
+means the model captures 89% of the variation in the data. The remaining 11% is noise
+that a straight line cannot capture. A perfect model scores 1.0; a model that just
+predicts the mean of y scores 0.0.</p>
+<hr />
+<h2>Step 6: Predict on new data</h2>
+<p>The practical payoff — using the trained model to make predictions on inputs it has
+never encountered:</p>
+<pre><code class="language-python">X_new = np.array([[0.5], [1.0], [1.5], [2.0]])
+y_new_pred = model.predict(X_new)
+</code></pre>
+<p>For X = 1.0, the model predicts approximately 6.94. The true value (without noise) is
+3 + 4(1.0) = 7.0. The model is right on target.</p>
+<p>This is what a trained model is for: you give it new measurements, and it returns
+predictions based on the pattern it learned from the training data.</p>
+<hr />
+<h2>Step 7: Visualise the results</h2>
+<p>Two plots tell you everything you need to know about a linear regression:</p>
+<p><strong>The fit plot</strong> shows the regression line against the actual data points. Training
+points and test points are plotted in different colours so you can visually check
+whether the model generalises — if the test points sit near the line just as well as
+the training points do, you are in good shape.</p>
+<p><strong>The residual plot</strong> shows prediction errors (y − ŷ) against predicted values. For
+a well-behaved linear regression, residuals should scatter randomly around zero with
+no visible pattern. If you see a curve, a funnel shape, or clusters, it means the
+linear assumption is wrong and a more complex model may be needed.</p>
+<pre><code class="language-python">import matplotlib.pyplot as plt
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+# Fit plot
+axes[0].scatter(X_train, y_train, color='steelblue', alpha=0.6, label='Training data')
+axes[0].scatter(X_test, y_test, color='coral', alpha=0.6, marker='s', label='Test data')
+X_line = np.linspace(0, 2, 100).reshape(-1, 1)
+axes[0].plot(X_line, model.predict(X_line), color='black', linewidth=2)
+axes[0].set_title('Linear Regression — Fit')
+axes[0].legend()
+
+# Residual plot
+residuals = y_test - y_pred
+axes[1].scatter(y_pred, residuals, color='steelblue', alpha=0.6)
+axes[1].axhline(y=0, color='black', linestyle='--')
+axes[1].set_title('Residual Plot — Test Set')
+</code></pre>
+<hr />
+<h2>What linear regression assumes (and when it breaks)</h2>
+<p>Linear regression is powerful but not universal. It makes several assumptions, and
+knowing them tells you when to reach for a different tool:</p>
+<p><strong>Linearity.</strong> The relationship between x and y is a straight line. If the true
+relationship is curved (exponential, polynomial, periodic), the model will
+systematically miss.</p>
+<p><strong>Independence.</strong> Each data point is independent of the others. Time series data, where
+each measurement depends on the previous one, often violates this.</p>
+<p><strong>Homoscedasticity.</strong> The spread of residuals is roughly constant across all values of
+x. If errors fan out (larger variance for larger x), the model's confidence intervals
+become unreliable.</p>
+<p><strong>Normality of residuals.</strong> The errors follow a roughly normal distribution. This
+matters most for statistical inference (confidence intervals, p-values) rather than for
+prediction accuracy.</p>
+<p>When these assumptions hold, linear regression is hard to beat for its simplicity and
+interpretability. When they break, the residual plot will usually show you.</p>
+<hr />
+<h2>Where this fits in the bigger picture</h2>
+<p>Linear regression is the foundation of supervised learning. Nearly every algorithm you
+will meet in this series is either an extension of it or a deliberate departure from it:</p>
+<ul>
+<li>
+<p><strong>Logistic regression</strong> (next article) replaces the straight line with a curve that
+  outputs probabilities instead of continuous values — classification instead of
+  regression.</p>
+</li>
+<li>
+<p><strong>Decision trees</strong> abandon the idea of a single global line and instead split the
+  data into regions, fitting a different value in each region.</p>
+</li>
+<li>
+<p><strong>Neural networks</strong> stack many linear regressions together with nonlinear activation
+  functions between them, allowing them to learn arbitrarily complex patterns.</p>
+</li>
+<li>
+<p><strong>Gradient descent</strong> (covered in the <a href="https://github.com/grahamroy">Maths Behind ML series</a>
+  Part 4) is the general-purpose method for finding optimal parameters when the Normal
+  Equation becomes too expensive to compute — which happens as soon as the number of
+  features grows large, or when <code>XᵀX</code> is too big to invert directly.</p>
+</li>
+</ul>
+<p>Understanding linear regression deeply — the cost function, the train/test split, the
+residual analysis — gives you a vocabulary and a set of tools that apply everywhere.
+The algorithms change. The principles do not.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub: <a href="https://github.com/grahamroy/algorithms-in-python/blob/main/01-supervised-learning/01-linear-regression/linear_regression.py"><strong>linear_regression.py</strong></a></p>
+<p>It runs both the from-scratch implementation and the scikit-learn version, prints all
+metrics, and produces a two-panel visualisation saved as <code>linear_regression_results.png</code>.</p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy matplotlib scikit-learn
+python linear_regression.py
+</code></pre>
+<p>The full repository for this series is at <a href="https://github.com/grahamroy/algorithms-in-python">github.com/grahamroy/algorithms-in-python</a>.</p>
+<hr />
+<h2>Summary</h2>
+<ol>
+<li>
+<p><strong>Linear regression</strong> fits the line ŷ = b₀ + b₁x to minimise the Mean Squared Error.</p>
+</li>
+<li>
+<p><strong>The Normal Equation</strong> θ = (XᵀX)⁻¹Xᵀy gives the exact optimal parameters in one
+   step — no iteration required.</p>
+</li>
+<li>
+<p><strong>Train/test split</strong> is non-negotiable. Always evaluate on data the model has not
+   seen during training.</p>
+</li>
+<li>
+<p><strong>MSE, RMSE, and R²</strong> are the standard metrics. MSE measures total error, RMSE puts
+   it in interpretable units, and R² tells you the fraction of variance explained.</p>
+</li>
+<li>
+<p><strong>The residual plot</strong> is your diagnostic tool. Random scatter around zero means the
+   model is well-specified. Patterns mean something is wrong.</p>
+</li>
+<li>
+<p><strong>Linear regression is the starting point</strong>, not the finish line. Every supervised
+   learning algorithm in this series builds on or reacts against the ideas introduced
+   here.</p>
+</li>
+</ol>
+<hr />
+<p><em>Part of the series </em><em>Algorithms in Python</em><em>. The 12-part <a href="https://github.com/grahamroy/algorithms-in-python">Foundations track</a> is complete; this is the first article in the supervised-learning track.</em>
+<em>Supervised Learning — Part 1: Linear Regression (this article)</em>
+<em>Supervised Learning — Part 2: Logistic Regression (next)</em></p>
+<hr />
+<p><strong>Tags:</strong> #MachineLearning #Python #LinearRegression #DataScience #ScikitLearn #SupervisedLearning #AI</p>

@@ -23,6 +23,12 @@ intuition, derive the mathematics, implement it from scratch in Python, then do 
 again with scikit-learn. By the end, you will understand not just *how* to use linear
 regression, but *why* it works.
 
+This is the first algorithm article in the series, sitting on top of the twelve
+[Foundations articles](https://github.com/grahamroy/algorithms-in-python) that came
+before it. We will lean explicitly on **arrays** (Part 1), **matrices** (Part 2), and
+**sparse matrices** (Part 11) where the algorithm uses them — those data structures
+are exactly what makes the linear-algebra steps below work at scale.
+
 ---
 
 ## The idea: one equation, two unknowns
@@ -77,7 +83,17 @@ parameters [b₀, b₁].
 
 What this equation says: project the target values onto the column space of X, and find
 the parameters that make the projection exact. If that sounds abstract, the code makes
-it concrete.
+it concrete. The whole calculation is the matrix algebra from
+[Foundations Part 2 — Matrices](https://medium.com/@grahamjroy/matrices-the-language-machine-learning-thinks-in-eb42b854a805)
+wired together: a transpose, two multiplications, and an inverse, applied to numpy
+arrays of the kind introduced in
+[Foundations Part 1 — Arrays](https://medium.com/@grahamjroy/arrays-where-every-algorithm-begins-9893bbc7d517).
+
+When the design matrix is *sparse* — TF-IDF features, one-hot-encoded categories,
+graph adjacency — the same equation has a much faster sparse solver, covered in
+[Foundations Part 11 — Sparse Matrices](https://medium.com/@grahamjroy/sparse-matrices-when-most-of-your-data-is-zero-85cebc669d78).
+Computing `np.linalg.inv(X.T @ X)` on a million-row sparse design matrix would be
+catastrophic; `scipy.sparse.linalg.lsqr` does the same job in seconds.
 
 ---
 
@@ -142,8 +158,8 @@ The result is a vector θ containing the intercept and slope.
 With the seed and data above, this gives:
 
 ```
-Intercept (b₀): 3.1242
-Slope (b₁):     3.8511
+Intercept (b₀): 3.1429
+Slope (b₁):     3.7993
 ```
 
 Close to the true values of 3 and 4. The small discrepancy is the noise — with only
@@ -194,8 +210,8 @@ better, but the number is hard to interpret on its own because it is in squared 
 as y, making it easier to understand. An RMSE of 1.05 means the model's predictions
 are off by about 1.05 units on average.
 
-**R² Score** is the proportion of variance in y that the model explains. An R² of 0.83
-means the model captures 83% of the variation in the data. The remaining 17% is noise
+**R² Score** is the proportion of variance in y that the model explains. An R² of 0.89
+means the model captures 89% of the variation in the data. The remaining 11% is noise
 that a straight line cannot capture. A perfect model scores 1.0; a model that just
 predicts the mean of y scores 0.0.
 
@@ -211,7 +227,7 @@ X_new = np.array([[0.5], [1.0], [1.5], [2.0]])
 y_new_pred = model.predict(X_new)
 ```
 
-For X = 1.0, the model predicts approximately 6.98. The true value (without noise) is
+For X = 1.0, the model predicts approximately 6.94. The true value (without noise) is
 3 + 4(1.0) = 7.0. The model is right on target.
 
 This is what a trained model is for: you give it new measurements, and it returns
@@ -295,9 +311,10 @@ will meet in this series is either an extension of it or a deliberate departure 
 - **Neural networks** stack many linear regressions together with nonlinear activation
   functions between them, allowing them to learn arbitrarily complex patterns.
 
-- **Gradient descent** (which we covered in the maths series) is the general-purpose
-  method for finding optimal parameters when the Normal Equation becomes too expensive
-  to compute — which happens as soon as the number of features grows large.
+- **Gradient descent** (covered in the [Maths Behind ML series](https://github.com/grahamroy)
+  Part 4) is the general-purpose method for finding optimal parameters when the Normal
+  Equation becomes too expensive to compute — which happens as soon as the number of
+  features grows large, or when `XᵀX` is too big to invert directly.
 
 Understanding linear regression deeply — the cost function, the train/test split, the
 residual analysis — gives you a vocabulary and a set of tools that apply everywhere.
@@ -345,9 +362,9 @@ The full repository for this series is at [github.com/grahamroy/algorithms-in-py
 
 ---
 
-*Part of the series **Algorithms in Python**:*
+*Part of the series **Algorithms in Python**. The 12-part [Foundations track](https://github.com/grahamroy/algorithms-in-python) is complete; this is the first article in the supervised-learning track.*
 *Supervised Learning — Part 1: Linear Regression (this article)*
-*Supervised Learning — Part 2: [Logistic Regression]*
+*Supervised Learning — Part 2: Logistic Regression (next)*
 
 ---
 
