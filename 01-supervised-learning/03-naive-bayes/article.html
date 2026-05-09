@@ -1,0 +1,326 @@
+<p>In Part 2 we trained a logistic regression by gradient descent on
+log loss, and the model that came out was a linear classifier:
+sigmoid of a weighted sum of features. Today we look at another
+linear classifier that gets to the same shape via a completely
+different route — no gradient descent, no iteration, just
+<em>counting</em>. It is one of the oldest algorithms in machine
+learning, it makes an obviously false assumption about the data,
+and on a class of problems — especially text classification — it
+beats more sophisticated models with embarrassing regularity.</p>
+<p>The algorithm is <strong>Naive Bayes</strong>. The "Bayes" part comes from
+Bayes' rule, which the model applies directly to compute
+<code>P(class | features)</code>. The "naive" part is the assumption that
+all features are <em>conditionally independent given the class</em> — an
+assumption that is almost never true in practice. The whole story
+of Naive Bayes is <em>why does the wrong assumption work so well?</em></p>
+<p>This article builds Naive Bayes from first principles. We will
+revisit Bayes' rule, derive the multinomial variant that powers
+text classifiers, implement it from scratch in numpy on a small
+spam-classification corpus, and finish with the question of when
+to reach for it (more often than you might think) and when to
+walk away (image features, mostly). By the end the
+"counting + Bayes' rule = classifier" pattern will be obvious,
+and you will see why every NLP toolkit still ships with a Naive
+Bayes baseline.</p>
+<hr />
+<h2>Bayes' rule, applied to classification</h2>
+<p>Given features <code>x</code> and a candidate class <code>y</code>, Bayes' rule says:</p>
+<pre><code>P(y | x) = P(x | y) · P(y) / P(x)
+</code></pre>
+<p>Read it left to right. The probability that the class is <code>y</code>
+given that we observed features <code>x</code> (the <strong>posterior</strong>) equals
+the probability of seeing those features given the class
+(the <strong>likelihood</strong>) times the prior probability of the class
+(the <strong>prior</strong>), divided by the probability of seeing those
+features at all (the <strong>evidence</strong>).</p>
+<p>For classification we want the most likely class — the <em>argmax</em>
+over <code>y</code> of <code>P(y | x)</code>. The evidence <code>P(x)</code> is the same for every
+candidate class, so it drops out of the comparison:</p>
+<pre><code>ŷ = argmax_y  P(y | x)
+   = argmax_y  P(x | y) · P(y)
+</code></pre>
+<p>Two terms to estimate from training data: <code>P(y)</code> (just count
+classes) and <code>P(x | y)</code> (the harder one — modelling the joint
+distribution of all features given the class). The hard term is
+where the "naive" assumption rescues us.</p>
+<hr />
+<h2>The independence assumption</h2>
+<p>Modelling <code>P(x | y)</code> properly means modelling how features
+co-vary inside each class. With a thousand features, that is a
+thousand-dimensional joint distribution per class. Estimating it
+from data is hopeless without astronomical amounts of training
+data, especially when most features are sparse or rare.</p>
+<p>Naive Bayes makes a sweeping simplification:</p>
+<pre><code>P(x | y)  =  ∏_i  P(x_i | y)
+</code></pre>
+<p>The probability of seeing the joint feature vector is the product
+of the per-feature probabilities, <em>as if every feature were
+independent of every other one given the class</em>. This is the
+"naive" assumption — and it is wrong. Two features that frequently
+co-occur (for example, the words "credit" and "card" in a spam
+email) are clearly not independent. But Naive Bayes pretends they
+are anyway.</p>
+<p>The resulting classifier is:</p>
+<pre><code>ŷ = argmax_y  P(y) · ∏_i  P(x_i | y)
+</code></pre>
+<p>In practice we work in <strong>log space</strong> to avoid underflow when
+multiplying many small probabilities:</p>
+<pre><code>ŷ = argmax_y  log P(y) + Σ_i  log P(x_i | y)
+</code></pre>
+<p>Two terms again. <code>log P(y)</code> is the log-prior, easy to estimate
+from class counts. <code>Σ_i log P(x_i | y)</code> is a sum of per-feature
+log-probabilities, each of which is also estimated by counting
+within the class. The whole classifier is <em>counting</em> —
+no optimisation loop, no learning rate, no convergence check.</p>
+<hr />
+<h2>Three flavours</h2>
+<p>What goes inside <code>P(x_i | y)</code> depends on what kind of feature
+<code>x_i</code> is. Three variants cover the vast majority of practical
+uses.</p>
+<p><strong>Multinomial Naive Bayes</strong> assumes each feature is a <em>count</em> —
+how often a word appeared in a document, how often a click
+happened in a session. The likelihood per class is a multinomial
+distribution over the vocabulary, and the per-feature probability
+is the proportion of that token's count among all token counts in
+the class. This is the variant text classifiers use.</p>
+<p><strong>Bernoulli Naive Bayes</strong> assumes each feature is <em>binary</em> —
+present or absent. A document is represented as a 0/1 vector
+indicating which words appeared at least once, ignoring counts.
+Useful when presence carries the signal but frequency does not
+(short messages, hashtags, categorical flags).</p>
+<p><strong>Gaussian Naive Bayes</strong> assumes each feature is <em>continuous</em> and
+follows a Gaussian distribution within each class. Estimate the
+mean and variance of each feature per class; at prediction time,
+plug into the Gaussian density formula. Useful for low-dimensional
+numeric features when you want a fast, calibrated baseline.</p>
+<p>In practice, multinomial dominates on text and Gaussian shows up
+in introductory examples. Bernoulli is rarer but elegant for
+short-text or feature-flag problems.</p>
+<hr />
+<h2>Multinomial Naive Bayes on text</h2>
+<p>The canonical Naive Bayes problem is <strong>spam classification</strong>. You
+have a corpus of emails labelled spam or ham; you want to predict
+the label of a new email. The standard representation:</p>
+<ul>
+<li>Tokenise each email into words.</li>
+<li>Build a vocabulary <code>V</code> of all distinct tokens across the corpus.</li>
+<li>Represent each email as a vector of length <code>|V|</code> whose <code>i</code>-th
+  entry is the count of token <code>i</code> in that email.</li>
+</ul>
+<p>This produces an <code>n_documents × |V|</code> count matrix. With even a
+modest vocabulary it is overwhelmingly zero — exactly the regime
+<a href="https://medium.com/@grahamjroy/sparse-matrices-when-most-of-your-data-is-zero-85cebc669d78">Foundations Part 11 — Sparse Matrices</a>
+covered. Scikit-learn's <code>MultinomialNB</code> accepts CSR sparse
+matrices directly.</p>
+<p>The training step is just counting:</p>
+<pre><code>For each class y:
+  P(y)        = (# documents in class y) / (total documents)
+  count(w, y) = total occurrences of word w across all class-y documents
+  total(y)    = total token count in class-y documents
+  P(w | y)    = (count(w, y) + α) / (total(y) + α · |V|)
+</code></pre>
+<p>The <code>α</code> term is <strong>Laplace smoothing</strong> (also called <em>additive
+smoothing</em>). It addresses what happens when a word in a test
+email never appeared in any training email of class <code>y</code>: without
+smoothing, <code>P(w | y) = 0</code>, and a single zero kills the whole
+product. Adding <code>α</code> (typically 1) to every count and <code>α · |V|</code> to
+the denominator ensures every word has a small positive
+probability under every class.</p>
+<p>Prediction: for a new document <code>d</code>, compute the log-posterior for
+each class:</p>
+<pre><code>log P(y | d) ∝ log P(y) + Σ_{w ∈ d} count(w, d) · log P(w | y)
+</code></pre>
+<p>…and pick the argmax. That is the entire algorithm.</p>
+<p>The companion script implements this from scratch on a small
+synthetic SMS corpus (32 messages, half spam, half ham) and
+reports its training and test performance:</p>
+<pre><code>Training Multinomial Naive Bayes from scratch...
+
+  Vocabulary size : 142 unique tokens
+  Class priors    : P(spam)=0.500  P(ham)=0.500
+  Smoothing alpha : 1.0
+
+Test set predictions:
+  message                                            true   predicted
+  &quot;free entry to win 100 cash text now&quot;              spam   spam   OK
+  &quot;please pick up bread on the way home&quot;             ham    ham    OK
+  &quot;URGENT call this number to claim your prize&quot;      spam   spam   OK
+  &quot;running late will be home in 20 mins&quot;             ham    ham    OK
+  &quot;congratulations you won a holiday voucher&quot;        spam   spam   OK
+  &quot;can you grab milk thanks&quot;                         ham    ham    OK
+  &quot;click here for free ringtones now&quot;                spam   spam   OK
+  &quot;see you at 7 for dinner&quot;                          ham    ham    OK
+
+  Accuracy: 1.000  (8/8)
+</code></pre>
+<p>Eight test messages, all classified correctly, after fitting on
+24 training examples. The same data through scikit-learn's
+<code>MultinomialNB</code> produces the same predictions.</p>
+<hr />
+<h2>Why does the wrong assumption work?</h2>
+<p>The independence assumption is provably wrong on most real data.
+"Credit" and "card" are not independent in a spam corpus; "the"
+and "a" are not independent in any English text. So why does the
+classifier perform well, sometimes outstandingly well, on
+real-world tasks?</p>
+<p>Three things cooperate.</p>
+<p><strong>Ranking is what matters, not calibration.</strong> The classifier's
+output is <code>argmax</code>, not the raw probability. Naive Bayes is
+notoriously <em>over-confident</em> — it routinely returns probabilities
+of 0.9999 when the true probability is more like 0.7 — but
+the <em>ordering</em> of classes is what determines the label. Even when
+the joint probabilities are wildly miscalibrated, the
+class-with-the-highest-score is often still the right one.</p>
+<p><strong>The errors of the independence assumption tend to cancel.</strong> When
+two features are correlated within both classes (say, "credit"
+and "card" appear together more in <em>both</em> spam and ham than would
+be predicted by independence), the resulting bias affects every
+class similarly and largely cancels in the argmax. This is the
+formal result behind Domingos and Pazzani's 1997 paper <em>"On the
+Optimality of the Simple Bayesian Classifier under Zero-One
+Loss"</em>, which showed Naive Bayes can be <em>optimal</em> even when its
+assumptions are violated.</p>
+<p><strong>High-dimensional sparse features are nearly independent.</strong> In
+text, most documents contain only a tiny fraction of the
+vocabulary. The pairwise correlation of any two specific words
+across the <em>full corpus</em> is small, because most documents have
+neither. The naive assumption is far less wrong on sparse data
+than on dense data, which is why Naive Bayes shines on text and
+struggles on images.</p>
+<p>The combination — argmax-only, errors cancel, sparse features —
+explains the long-running puzzle of why a model with such a wrong
+assumption keeps showing up at the top of practical leaderboards
+on certain problem classes.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>[[BIG-O TABLE IMAGE]]</p>
+<p>Three notes. <strong>Training is O(n · d) — a single pass through the
+data.</strong> No iteration, no convergence — Naive Bayes is the fastest
+classifier to fit in this entire series. <strong>Prediction is O(d · K)
+per example</strong>, where <code>K</code> is the number of classes; in text
+classification with <code>K = 2</code> and <code>d</code> small (only the words in the
+document, not the whole vocabulary), this is essentially free.
+<strong>Memory is O(K · |V|)</strong> for the per-class log-probability tables.
+On a 100,000-word vocabulary with 10 classes, that is 1 million
+floats — about 8 MB. The model is tiny by any standard.</p>
+<p>The contrast with logistic regression: gradient descent has to
+iterate, and each iteration is also O(n · d). Naive Bayes
+finishes in the time logistic regression takes for a single
+epoch. On modest-sized text corpora (millions of documents,
+hundreds of thousands of features) Naive Bayes trains in
+seconds where logistic regression takes minutes.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>Naive Bayes is the algorithm that <em>won't go away</em>. It keeps
+showing up because it is fast, it is calibrated enough for many
+purposes, and it works.</p>
+<p><strong>Spam filtering.</strong> The historical use case. SpamAssassin's
+original Bayesian filter, every email provider's first-generation
+filter, and the spam classifiers still built into low-resource
+mailservers — Multinomial or Bernoulli Naive Bayes. Modern Gmail
+and Outlook layer deep models on top, but the Naive Bayes
+baseline is still doing real work in the pipeline.</p>
+<p><strong>Sentiment analysis baseline.</strong> Before BERT and the LLM era,
+sentiment analysis was overwhelmingly Multinomial NB on n-grams.
+Even today, when an engineer says "let me start with a baseline,"
+the baseline they fit in 30 seconds is almost certainly NB on
+TF-IDF. Beating it by enough to justify a heavier model is the
+real bar most fancy methods have to clear.</p>
+<p><strong>Document categorisation.</strong> Newspaper archives, customer-support
+ticket triage, legal-document classification — all routinely
+deployed as Naive Bayes when the corpus is large, the categories
+are clear, and the latency budget is tight. Reuters' famous
+<code>Reuters-21578</code> benchmark established Naive Bayes as the
+near-state-of-the-art for text categorisation through the 1990s
+and early 2000s.</p>
+<p><strong>Language identification.</strong> Detecting whether a piece of text is
+French, German, or Polish is <em>almost a solved problem</em> with
+Naive Bayes on character n-grams. Google's <code>cld3</code> and many
+production language detectors are still trained on this
+principle. The features — n-gram frequencies — happen to be
+nearly independent in the way Naive Bayes likes.</p>
+<p><strong>Medical and biological classification.</strong> Disease screening from
+symptom checklists, clinical-text classification (positive vs
+negative chest X-ray reports), variant calling in bioinformatics
+— all problems where Naive Bayes' interpretability and small
+data footprint matter. The model gives you a per-feature
+log-probability that is easy to audit, which is the same property
+that keeps logistic regression in regulated industries.</p>
+<p><strong>Real-time / edge classification.</strong> Naive Bayes' tiny memory
+footprint and constant-time prediction make it the right choice
+when the model has to live on a microcontroller or run inside a
+firewall packet inspector. ML on a Raspberry Pi for IoT
+classification is often Naive Bayes.</p>
+<p><strong>The "first model to ship" baseline.</strong> The single most common
+pattern: train Naive Bayes on day one, ship it as the v1 service,
+spend the next quarter exploring deeper models. If they do not
+beat NB by a clear margin, you do not ship them. This is true at
+both startups and FAANG-scale teams.</p>
+<hr />
+<h2>When NOT to use Naive Bayes</h2>
+<p>Naive Bayes is great at what it does, but it is also brittle in
+specific ways:</p>
+<p><strong>When features are densely correlated.</strong> Image features
+(adjacent pixels), audio features (adjacent samples), tabular
+features with strong interaction effects — the independence
+assumption is badly violated and the classifier suffers. Use a
+tree-based model or a neural network.</p>
+<p><strong>When you need calibrated probabilities.</strong> Naive Bayes is
+notoriously over-confident — it returns 0.9999 when the truth is
+0.85. If your downstream system thresholds, ranks under
+uncertainty, or feeds into a cost-sensitive decision, run
+calibration on top (e.g. Platt scaling or isotonic regression),
+or just use logistic regression instead.</p>
+<p><strong>When zero-frequency words dominate.</strong> Smoothing rescues <em>some</em>
+unseen words, but if test documents are full of vocabulary that
+never appeared in training, the smoothing assumption is doing all
+the work and the predictions are essentially priors. This is
+common when training and test corpora come from very different
+distributions (training on news, testing on tweets).</p>
+<p><strong>When the features are continuous and non-Gaussian.</strong> Gaussian
+Naive Bayes assumes per-class Gaussianity, which fails for skewed,
+multi-modal, or heavy-tailed features. Either bucket the features
+into bins and treat them as multinomial, or use a different
+classifier entirely.</p>
+<p><strong>When you have abundant labelled data and a strong model.</strong>
+Naive Bayes' bias does not melt away as you give it more data;
+it just plateaus at whatever the independence assumption can
+support. With millions of examples and a transformer or
+gradient-boosted tree, you will beat NB by a meaningful margin —
+just plan to actually beat it, not just run it.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 4 of the supervised-learning track is <strong>K-Nearest
+Neighbours</strong> (KNN) — the simplest distance-based classifier and
+a direct callback to the KD-trees from
+<a href="https://medium.com/@grahamjroy/trees-hierarchical-structure-for-decisions-search-and-database-indexes-64767b20394f">Foundations Part 8 — Trees</a>.
+KNN takes the opposite approach to Naive Bayes: zero training
+(just store the data), all the work happens at prediction time
+(find the <em>k</em> nearest training examples, vote). The contrast
+between the two highlights an axis we will return to often —
+<em>model in your fitted parameters</em> vs <em>model in your training
+set</em>.</p>
+<p>After KNN comes <strong>Decision Trees</strong>, the gateway to the
+random-forest / gradient-boosting family that wins on most
+tabular ML benchmarks.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/01-supervised-learning/03-naive-bayes/naive_bayes.py"><strong>naive_bayes.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scikit-learn
+python naive_bayes.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scikit-learn</code>. The script implements
+Multinomial Naive Bayes from scratch on a tiny spam/ham SMS
+corpus, classifies a held-out set, compares against scikit-learn's
+<code>MultinomialNB</code> (which agrees on every prediction), and prints
+the most informative tokens per class — the words that move the
+log-posterior the most, like <em>free</em>, <em>URGENT</em>, <em>click</em> on the
+spam side and <em>home</em>, <em>thanks</em>, <em>dinner</em> on the ham side. The
+headline insight worth pinning to the wall: <strong>Naive Bayes is
+just counting plus Bayes' rule, runs in a single pass through
+the data, and sets the baseline that every fancier text
+classifier still has to beat</strong>.</p>
+<hr />
+<p><em>This is Part 3 of the Algorithms in Python series, Supervised Learning track. The companion script <code>naive_bayes.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/c67849455e74">Part 2</a> covered logistic regression. Part 4 will look at K-Nearest Neighbours — the lazy classifier that does no training and all of its work at prediction time.</em></p>

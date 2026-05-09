@@ -33,7 +33,7 @@ clear explanations and Python implementations.
 |---|-----------|--------|
 | 1 | Linear Regression | ✅ |
 | 2 | Logistic Regression | ✅ |
-| 3 | Naive Bayes | ⬜ |
+| 3 | Naive Bayes | ✅ |
 | 4 | K-Nearest Neighbours | ⬜ |
 | 5 | Decision Trees | ⬜ |
 
