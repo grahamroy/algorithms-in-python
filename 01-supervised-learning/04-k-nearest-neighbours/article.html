@@ -1,0 +1,335 @@
+<p>In Part 3 we built a Naive Bayes classifier that did all of its
+work at training time — count classes, count features per class,
+build a per-class log-probability table — and then made
+predictions in microseconds with a tiny vector-vector dot
+product. Today we look at the algorithm that takes the <em>exact
+opposite</em> approach: zero training, all the work at prediction
+time. There is no model to fit; the training set <em>is</em> the model.
+Asked to label a new example, it digs through every training
+example, finds the closest ones, and lets them vote.</p>
+<p>The algorithm is <strong>K-Nearest Neighbours</strong> (KNN). It is the most
+intuitive supervised-learning algorithm ever proposed: things
+that look like other things tend to <em>be</em> other things. It
+pre-dates the field of machine learning as a name — the basic idea
+was formalised by Fix and Hodges in 1951, before anyone called
+this &ldquo;ML&rdquo; — and it has never gone away. Modern recommender
+systems, retrieval-augmented language models, image search, and
+half of the anomaly-detection literature still build on KNN at
+their core, just with much faster ways of finding the nearest
+neighbours.</p>
+<p>This article builds KNN from first principles. We will walk
+through the algorithm, the three big design choices (distance
+metric, <em>k</em>, vote weighting), implement it from scratch in numpy,
+look at why it breaks in high dimensions and how the KD-trees
+from <a href="https://medium.com/@grahamjroy/trees-hierarchical-structure-for-decisions-search-and-database-indexes-64767b20394f">Foundations Part 8 — Trees</a>
+and the ANN indexes from
+<a href="https://medium.com/@grahamjroy/vector-indexes-the-data-structures-behind-vector-search-9ca81830f658">Foundations Part 12 — Vector Indexes</a>
+fix the worst of it, and finish with the surprisingly long list
+of places KNN is still doing real work in production.</p>
+<hr />
+<h2>The KNN algorithm</h2>
+<p>KNN is a <em>lazy learner</em>. The training step is just storing the
+data:</p>
+<pre><code>fit(X_train, y_train)  →  remember (X_train, y_train)
+</code></pre>
+<p>That is it. No parameters are estimated, no objective is
+minimised, no convergence is checked. Training is O(n · d) only
+because we have to <em>read</em> the data into memory.</p>
+<p>The prediction step is where the work happens. Given a new point
+<code>x</code>:</p>
+<pre><code>1.  Compute the distance from x to every training point.
+2.  Sort the training points by distance, ascending.
+3.  Take the first k.
+4.  Classification → majority vote of their labels.
+    Regression     → mean (or weighted mean) of their labels.
+</code></pre>
+<p>For classification, ties are usually broken by the closest
+neighbour, by lowest class index, or by reducing <em>k</em> by one. For
+regression, the prediction is simply the mean target value of
+the <em>k</em> nearest training points.</p>
+<p>The whole algorithm fits in five lines of numpy:</p>
+<pre><code class="language-python">def predict_one(x_query, X_train, y_train, k=5):
+    d = np.linalg.norm(X_train - x_query, axis=1)
+    idx = np.argpartition(d, k)[:k]
+    return Counter(y_train[idx]).most_common(1)[0][0]
+</code></pre>
+<p>Three things make KNN unusually attractive:</p>
+<ul>
+<li><strong>No training time.</strong> You can ship a KNN classifier the moment
+  you have labelled data. There is no hyperparameter search for
+  weights, no convergence to babysit.</li>
+<li><strong>Trivially incremental.</strong> Adding a new labelled example is
+  appending to an array. No retraining loop.</li>
+<li><strong>Local decision boundary.</strong> The decision surface bends to fit
+  the data exactly — it is non-parametric, with no global form
+  imposed.</li>
+</ul>
+<p>The cost is paid at prediction time, and as we will see, that
+cost can be brutal as the data grows.</p>
+<hr />
+<h2>Three design choices</h2>
+<p>Three knobs control how a KNN classifier behaves: the distance
+metric, the value of <em>k</em>, and how the votes are weighted.</p>
+<h3>Distance metric</h3>
+<p>The metric defines what &ldquo;near&rdquo; means, and this is more
+consequential than people realise. A model with the wrong
+distance is solving the wrong problem.</p>
+<p><strong>Euclidean (L2)</strong>. The straight-line distance, <code>√Σ (x_i - y_i)²</code>.
+The default for continuous features that all live on roughly the
+same scale. Standardise your features first or one large-scale
+feature dominates the distance.</p>
+<p><strong>Manhattan (L1)</strong>. The grid distance, <code>Σ |x_i - y_i|</code>. Less
+sensitive to outliers than L2 because it doesn&rsquo;t square the
+gaps. Often a better default in high-dimensional data, where
+L2&rsquo;s behaviour degrades faster.</p>
+<p><strong>Cosine distance</strong>. <code>1 - (x · y) / (‖x‖ · ‖y‖)</code>. Compares the
+<em>direction</em> of the vectors, ignoring magnitude. The right choice
+for text (TF-IDF vectors), embeddings from neural networks, and
+anywhere the magnitude is an artefact of normalisation.</p>
+<p><strong>Hamming</strong>. The fraction of positions where two vectors differ.
+For categorical or binary features (genome variants, feature
+flags, set-membership encodings).</p>
+<p><strong>Mahalanobis</strong>. Like Euclidean but pre-multiplied by the inverse
+covariance matrix of the training data. Treats correlated
+features as a single &ldquo;direction&rdquo; — the right metric when you
+care about statistical distance rather than geometric distance.</p>
+<p>The metric is part of the model. Switching from Euclidean to
+cosine on the same dataset can flip predictions wholesale.</p>
+<h3>Choice of k</h3>
+<p>The value of <em>k</em> sets the bias-variance tradeoff cleanly:</p>
+<ul>
+<li><strong>k = 1</strong> has zero bias and high variance. Every training point
+  defines its own region; the boundary is wiggly and overfits
+  individual noisy points.</li>
+<li><strong>k = n</strong> (the full training set) has high bias and zero
+  variance. Every prediction is just the majority class —
+  effectively a constant model.</li>
+<li><strong>k between</strong> is where the action is. Usually we pick <em>k</em> by
+  cross-validation. Common sweet spots are 5, 7, or 11 for
+  small/medium datasets; the rule of thumb <code>k ≈ √n</code> is decent for
+  a starting point.</li>
+</ul>
+<p>Odd values are conventional for binary classification to avoid
+ties.</p>
+<h3>Vote weighting</h3>
+<p>By default each of the <em>k</em> neighbours casts an equal vote, but
+this throws away signal. A neighbour at distance 0.01 is almost
+certainly the right answer; one at distance 4.7 is barely better
+than chance. <strong>Distance-weighted voting</strong> weights each neighbour
+by <code>1 / (d + ε)</code>:</p>
+<pre><code>score(class c) = Σ_{i ∈ k-nearest, y_i = c}  1 / (d_i + ε)
+</code></pre>
+<p>The tiny <code>ε</code> avoids division by zero when a query coincides
+exactly with a training point. Distance weighting smooths the
+boundary, gives finer-grained probability estimates, and is
+usually a free improvement.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script generates a 2D synthetic dataset (300
+points, 3 well-separated Gaussian classes) and walks the
+classifier through it. Here is the from-scratch core:</p>
+<pre><code class="language-python">class KNearestNeighbours:
+    def __init__(self, k=5, weights=&quot;uniform&quot;):
+        self.k = k
+        self.weights = weights  # &quot;uniform&quot; or &quot;distance&quot;
+
+    def fit(self, X, y):
+        self.X = np.asarray(X, dtype=float)
+        self.y = np.asarray(y)
+
+    def predict(self, X_query):
+        out = []
+        for x in X_query:
+            # 1. distances to every training point
+            d = np.linalg.norm(self.X - x, axis=1)
+            # 2. indices of the k smallest
+            idx = np.argpartition(d, self.k)[:self.k]
+            labels = self.y[idx]
+            if self.weights == &quot;uniform&quot;:
+                out.append(Counter(labels).most_common(1)[0][0])
+            else:
+                w = 1.0 / (d[idx] + 1e-12)
+                scores = {}
+                for lab, wi in zip(labels, w):
+                    scores[lab] = scores.get(lab, 0.0) + wi
+                out.append(max(scores, key=scores.get))
+        return np.array(out)
+</code></pre>
+<p>That is the entire algorithm. Run it on the demo dataset and you
+get:</p>
+<pre><code>DEMO 1 --- KNN from scratch on 3-class synthetic data
+  Training set: 400 examples, 2 features
+  Test set    : 100 examples
+  k = 5, weights = uniform
+  Accuracy    : 0.870  (87/100)
+
+DEMO 2 --- Same data, scikit-learn KNeighborsClassifier
+  Accuracy    : 0.870  (87/100)
+
+DEMO 3 --- Bias-variance sweep over k
+  k =   1  acc = 0.860  (high variance, jagged boundary)
+  k =   3  acc = 0.870
+  k =   5  acc = 0.870
+  k =   7  acc = 0.880
+  k =  15  acc = 0.890
+  k =  31  acc = 0.880
+  k =  75  acc = 0.890
+  k = 199  acc = 0.880  (high bias, oversmoothed boundary)
+  k = 399  acc = 0.370  (majority-class baseline)
+</code></pre>
+<p>The scikit-learn predictions match ours on every test example.
+The bias-variance sweep shows the textbook U-shape: tiny <em>k</em>
+overfits a little, the middle (around k = 15–75) is the sweet
+spot, and as <em>k</em> approaches the size of the training set the
+classifier collapses into &ldquo;always predict the majority class&rdquo;
+and accuracy tumbles to 37%.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Three notes worth pulling out. <strong>Training is O(n · d) only
+because we have to read the data into memory</strong> — there is no
+fitting step. <strong>Brute-force prediction is O(n · d) per query</strong>
+which scales linearly in the training-set size; for a million
+training examples and a 256-dimensional embedding, that is 256
+million floating-point operations <em>per prediction</em>. <strong>Memory is
+O(n · d)</strong> — the entire training set lives in RAM, no
+compression.</p>
+<p>This is why production KNN is almost never brute force. KD-trees
+(<a href="https://medium.com/@grahamjroy/trees-hierarchical-structure-for-decisions-search-and-database-indexes-64767b20394f">Foundations Part 8 — Trees</a>)
+bring prediction down to roughly <code>O(d · log n)</code> on low-dimensional
+data (say <code>d &lt; 20</code>), and ball trees push the same idea a little
+further. Above ~30 dimensions, both data structures collapse
+into something close to brute force, and the practical answer
+becomes the approximate-nearest-neighbour indexes from
+<a href="https://medium.com/@grahamjroy/vector-indexes-the-data-structures-behind-vector-search-9ca81830f658">Foundations Part 12 — Vector Indexes</a> —
+HNSW, IVF, PQ. They give up exactness for an enormous speed-up,
+typically 100× to 1000× faster with 95–99% recall.</p>
+<hr />
+<h2>The curse of dimensionality</h2>
+<p>KNN&rsquo;s reliance on distances is also its weakness. In
+high-dimensional spaces, distances behave in counter-intuitive ways:
+<em>every</em> pair of points becomes roughly the same distance apart,
+and the very concept of &ldquo;nearest&rdquo; loses its meaning.</p>
+<p>Pick <code>d</code>-dimensional uniform random points in the unit cube. The
+ratio of the maximum to minimum pairwise distance approaches 1
+as <code>d</code> grows. By 100 dimensions, the closest training point and
+the farthest training point are almost equidistant from any
+query — and a 5-NN classifier is essentially picking 5 random
+training points and voting.</p>
+<p>There are two ways to fight this. The first is <strong>reduce the
+dimension</strong>: PCA, autoencoders, learned embeddings (Word2Vec,
+sentence transformers, image encoders) all compress raw features
+into a low-dimensional space where distances mean what we want.
+The second is <strong>learn the right metric</strong>: metric-learning losses
+(triplet loss, contrastive loss, ArcFace) train a neural network
+to produce embeddings where same-class pairs are close and
+different-class pairs are far. KNN on the learned embedding then
+works beautifully — and this is exactly the recipe behind face
+recognition, image search, and recommendation systems.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>KNN is the algorithm that hides inside other systems:</p>
+<p><strong>Item-item collaborative filtering.</strong> Amazon&rsquo;s seminal 2003
+paper <em>Item-to-Item Collaborative Filtering</em> describes building
+a sparse similarity matrix between products and serving
+recommendations as the <em>k</em> nearest items to whatever the user
+just looked at. The core algorithm is KNN with cosine
+similarity. Variants of it still power &ldquo;you might also like&rdquo;
+panels at every major retailer.</p>
+<p><strong>kNN language models.</strong> Khandelwal et al&rsquo;s 2020 paper <em>Generalisation
+through Memorisation: Nearest Neighbor Language Models</em> showed
+that a transformer LM augmented with a kNN lookup over a giant
+datastore of cached <code>(context, next-token)</code> pairs measurably
+improves perplexity. The model uses learned representations from
+the LM as the metric space; KNN does the retrieval. This is the
+intellectual ancestor of every retrieval-augmented LLM in
+production today.</p>
+<p><strong>Image search and face recognition.</strong> Compute embeddings with a
+deep CNN trained via metric learning, store them in an HNSW
+index, look up the <em>k</em> nearest at query time. Pinterest&rsquo;s visual
+search, Google Photos&rsquo; face grouping, every &ldquo;find similar
+images&rdquo; feature you have ever clicked — all KNN over learned
+embeddings.</p>
+<p><strong>Anomaly detection.</strong> Local Outlier Factor (LOF), k-distance
+methods, and isolation-by-distance approaches all reduce to KNN
+on the dataset and look at how <em>unusual</em> a point&rsquo;s neighbourhood
+is. Production fraud-detection systems still ship LOF.</p>
+<p><strong>Few-shot classification.</strong> Prototypical Networks (Snell et al,
+2017) embed each class&rsquo;s few-shot examples, average them into a
+prototype, and classify new queries by 1-NN against the
+prototypes. Modern few-shot learning is mostly variants on this.</p>
+<p><strong>Vector databases.</strong> Pinecone, Weaviate, Qdrant, Chroma, and
+the FAISS library all exist because KNN over high-dimensional
+embeddings is so useful. The substrate of every modern RAG
+system is &ldquo;embed your query, KNN against your document
+embeddings, feed the top-k chunks to the LLM.&rdquo; That is just KNN
+with a few extra steps.</p>
+<p>The pattern is consistent: the heavy lifting (the embedding) is
+done by a model trained for the task; KNN does the final
+retrieval over that learned space.</p>
+<hr />
+<h2>When NOT to use KNN</h2>
+<p>KNN&rsquo;s simplicity hides several brittle assumptions:</p>
+<p><strong>When you have a lot of training data and tight latency.</strong> A
+brute-force KNN over a million training points takes hundreds of
+milliseconds per query and grows linearly. ANN indexes help, but
+they introduce their own complexity (build time, memory, recall
+loss) that often pushes you toward a parametric model
+altogether.</p>
+<p><strong>When the data is genuinely high-dimensional with no learned
+embedding.</strong> Raw 4096-dimensional bag-of-words, raw
+2048-dimensional ResNet activations without metric learning,
+genome SNPs — distances are unreliable. Train an embedding
+first or pick a different model.</p>
+<p><strong>When features are heterogeneous in scale or type.</strong> A Euclidean
+distance over <code>[age, income, zip-code-as-int]</code> is meaningless.
+Either standardise carefully, build a custom distance, or use a
+tree-based model that doesn&rsquo;t care about scale.</p>
+<p><strong>When classes are heavily imbalanced.</strong> A 99-to-1 class ratio
+will dominate the <em>k</em> nearest neighbours of almost any query
+unless you use distance-weighted voting <em>and</em> tune <em>k</em> carefully.
+Tree-based or cost-sensitive models handle this more gracefully.</p>
+<p><strong>When you need to explain <em>why</em> a prediction came out a certain
+way, and &ldquo;look at these five training points&rdquo; is not an
+acceptable answer.</strong> KNN&rsquo;s explanations are the neighbours
+themselves. That is sometimes wonderful (it is <em>literally</em>
+case-based reasoning) and sometimes useless (when the neighbours
+are high-dimensional embeddings nobody can interpret).</p>
+<p><strong>When you can&rsquo;t keep the entire training set in memory.</strong> KNN
+is non-parametric — there is no compressed model. Bigger
+datasets mean bigger memory.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 5 of the supervised-learning track is <strong>Decision Trees</strong> —
+the model that abandons distances entirely and learns the
+classifier as a sequence of axis-aligned splits. Where KNN&rsquo;s
+flexibility comes from local averaging, decision trees get
+theirs from recursive partitioning, and where KNN struggles in
+high dimensions, decision trees handle it without breaking a
+sweat. Decision trees are also the gateway to the ensemble
+family — random forests, gradient boosting (XGBoost, LightGBM,
+CatBoost) — that wins on most tabular ML benchmarks.</p>
+<p>After that we will round out the supervised-learning track and
+move to the advanced supervised models (random forests, GBMs,
+SVMs).</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/01-supervised-learning/04-k-nearest-neighbours/knn.py"><strong>knn.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scikit-learn
+python knn.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scikit-learn</code>. The script generates a 2D
+three-class synthetic dataset, fits a from-scratch KNN
+classifier, compares against scikit-learn&rsquo;s
+<code>KNeighborsClassifier</code> (which agrees on every prediction), and
+runs a <em>k</em>-sweep that reproduces the textbook bias-variance
+U-shape — small <em>k</em> overfits, large <em>k</em> underfits, the middle
+wins. The headline insight worth pinning to the wall: <strong>KNN
+moves all of the work from training to prediction, the metric
+is a hyperparameter that matters as much as <em>k</em>, and the
+algorithm is now mostly used as the retrieval step on top of a
+learned embedding rather than on the raw features</strong>.</p>
+<hr />
+<p><em>This is Part 4 of the Algorithms in Python series, Supervised Learning track. The companion script <code>knn.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/e4b5a43e4e60">Part 3</a> covered Naive Bayes. Part 5 will look at Decision Trees — the model that classifies by splitting the feature space rather than measuring distances in it.</em></p>
