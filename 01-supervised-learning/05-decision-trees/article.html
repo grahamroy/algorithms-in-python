@@ -1,0 +1,389 @@
+<p>In Part 4 we built a K-Nearest Neighbours classifier whose
+decision boundary bent itself to fit the data — locally,
+implicitly, by averaging the labels of nearby training points.
+Today we look at a model that takes the opposite approach:
+it draws the decision boundary <em>explicitly</em>, as a sequence of
+axis-aligned splits, and the resulting &ldquo;if-then&rdquo; rules are so
+human-readable that small trees can be drawn on a whiteboard
+and discussed by hand.</p>
+<p>The algorithm is the <strong>Decision Tree</strong>. Pick a feature, pick a
+threshold, ask &ldquo;is <code>x_i ≤ t</code>?&rdquo; — if yes, go left; if no, go
+right. Repeat in each child until the local subset is pure
+enough to stop, then label the leaf with the majority class
+(for classification) or the mean target (for regression).
+The whole model is a flowchart of yes/no questions, and the
+&ldquo;learning&rdquo; reduces to a single question we keep asking
+recursively: <em>which split makes the children as pure as
+possible?</em></p>
+<p>This article builds a CART-style decision tree from first
+principles. We will derive Gini impurity (the splitting
+criterion sklearn uses by default), implement the recursive
+algorithm in numpy, train it on a synthetic 2D dataset where
+linear classifiers fail, compare against scikit-learn&rsquo;s
+<code>DecisionTreeClassifier</code>, and finish with the <em>real</em> reason
+decision trees matter: as the building block of the random
+forests, gradient-boosting machines, and XGBoost-style models
+that win most tabular ML benchmarks. A single tree is a baseline
+with personality. An ensemble of them is often state of the art.</p>
+<hr />
+<h2>The basic idea</h2>
+<p>A decision tree partitions the feature space into a set of
+non-overlapping axis-aligned rectangles, and assigns one
+prediction to every rectangle. Internally it is just a binary
+tree:</p>
+<ul>
+<li>An <strong>internal node</strong> holds a question — <code>(feature_index, threshold)</code> —
+  and routes the example to its left or right child.</li>
+<li>A <strong>leaf</strong> holds a prediction — a class label, a probability
+  vector, or a regression value.</li>
+</ul>
+<p>Prediction is trivial. Start at the root, evaluate the question,
+walk left or right, repeat until you hit a leaf, return what is
+there. Total cost is <code>O(depth)</code> — for a balanced tree on
+<code>n</code> examples, that is <code>O(log n)</code>.</p>
+<p>Training is the interesting part. We need to learn:</p>
+<ul>
+<li><em>Which</em> feature to split on at each node.</li>
+<li><em>What</em> threshold to use.</li>
+<li><em>When</em> to stop splitting and turn the node into a leaf.</li>
+</ul>
+<p>The classical answer — and the one CART (Breiman et al, 1984)
+made the de-facto standard — is to be greedy. At every node, try
+every feature and every candidate threshold, score how good the
+resulting split is, take the best one, recurse. Stop when the
+node is pure, or when a stopping rule kicks in (max depth,
+minimum samples per leaf, minimum impurity decrease).</p>
+<hr />
+<h2>Picking the best split</h2>
+<p>The whole algorithm hinges on one number: how do we score a
+candidate split?</p>
+<p>The intuition is the <em>purity</em> of the children. A split is good
+if the two subsets it produces are each more class-homogeneous
+than the parent. Pure children mean the split has separated the
+classes well; mixed children mean the split was uninformative.</p>
+<p>Two impurity measures dominate.</p>
+<h3>Gini impurity</h3>
+<p>For a node with class proportions <code>p_1, p_2, ..., p_K</code>:</p>
+<pre><code>Gini(node) = 1 - Σ_k p_k²
+</code></pre>
+<p>It ranges from <code>0</code> (perfectly pure — one class) to <code>1 - 1/K</code>
+(uniform across all <code>K</code> classes). Intuition: it is the
+probability that a randomly drawn pair of examples from the node
+have different labels.</p>
+<h3>Entropy and information gain</h3>
+<pre><code>Entropy(node) = - Σ_k p_k · log₂ p_k
+</code></pre>
+<p>Ranges from <code>0</code> (pure) to <code>log₂ K</code> (uniform). It measures how
+surprised you would be on average by the next label. <strong>Information
+gain</strong> is the entropy of the parent minus the weighted entropy of
+the children — the reduction in uncertainty produced by the split.</p>
+<p>Both criteria pick essentially the same splits in practice. CART
+uses Gini (cheaper to compute, no log), C4.5 uses entropy.
+Sklearn&rsquo;s default is Gini.</p>
+<h3>The split score</h3>
+<p>For a candidate split that sends <code>n_L</code> examples left and <code>n_R</code>
+examples right (with <code>n = n_L + n_R</code> total in the parent), we
+score it as the <em>weighted impurity of the children</em>:</p>
+<pre><code>score(split) = (n_L / n) · Gini(left)
+             + (n_R / n) · Gini(right)
+</code></pre>
+<p>The best split at this node is the one that minimises this
+score. Equivalently, the one that maximises the <em>impurity
+decrease</em> — the parent&rsquo;s Gini minus the score above.</p>
+<hr />
+<h2>The recursive algorithm</h2>
+<p>Putting it together:</p>
+<pre><code>build_tree(X, y, depth):
+    if stopping criteria met:
+        return Leaf(majority_class(y))
+
+    best_score = +inf
+    best_split = None
+    for feature in features:
+        for threshold in candidate_thresholds(X[:, feature]):
+            left_mask = X[:, feature] &lt;= threshold
+            score = weighted_gini(y[left_mask], y[~left_mask])
+            if score &lt; best_score:
+                best_score = score
+                best_split = (feature, threshold, left_mask)
+
+    if best_split is None:
+        return Leaf(majority_class(y))
+
+    f, t, mask = best_split
+    left  = build_tree(X[mask],  y[mask],  depth + 1)
+    right = build_tree(X[~mask], y[~mask], depth + 1)
+    return Node(feature=f, threshold=t, left=left, right=right)
+</code></pre>
+<p>Stopping criteria are usually a combination of:</p>
+<ul>
+<li><strong>Pure node</strong> — every example has the same label.</li>
+<li><strong>Max depth</strong> — caps overfitting and keeps prediction fast.</li>
+<li><strong>Min samples per leaf / per split</strong> — refuses splits that
+  would create tiny, noisy leaves.</li>
+<li><strong>Min impurity decrease</strong> — refuses splits that barely improve
+  purity.</li>
+</ul>
+<p>Without any of these stopping rules a tree will keep growing
+until every leaf has one example. That memorises the training
+set perfectly and almost always overfits.</p>
+<p>For the candidate thresholds, the classical choice is the
+midpoints between consecutive sorted values of the feature in
+the current node. With <code>m</code> distinct values that gives <code>m - 1</code>
+candidates per feature.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script generates a 2D two-class dataset shaped
+like two interleaving half-moons — a problem where any linear
+classifier is doomed but a tree can carve out the curved
+boundary with a sequence of axis-aligned splits.</p>
+<p>The from-scratch tree:</p>
+<pre><code class="language-python">class DecisionTreeClassifier:
+    def __init__(self, max_depth=None, min_samples_leaf=1):
+        self.max_depth = max_depth
+        self.min_samples_leaf = min_samples_leaf
+
+    def fit(self, X, y):
+        self.classes_ = np.unique(y)
+        self.root = self._build(np.asarray(X, float),
+                                np.asarray(y), depth=0)
+        return self
+
+    def _gini(self, y):
+        if len(y) == 0:
+            return 0.0
+        _, counts = np.unique(y, return_counts=True)
+        p = counts / counts.sum()
+        return 1.0 - (p * p).sum()
+
+    def _build(self, X, y, depth):
+        # Stopping criteria
+        if (len(np.unique(y)) == 1
+                or len(y) &lt; 2 * self.min_samples_leaf
+                or (self.max_depth is not None
+                    and depth &gt;= self.max_depth)):
+            return _Leaf(self._majority(y))
+        # Greedy best split over every feature and threshold
+        feat, thr, score = self._best_split(X, y)
+        if feat is None:
+            return _Leaf(self._majority(y))
+        mask = X[:, feat] &lt;= thr
+        left  = self._build(X[mask],  y[mask],  depth + 1)
+        right = self._build(X[~mask], y[~mask], depth + 1)
+        return _Node(feat, thr, left, right)
+</code></pre>
+<p>The helper methods (<code>_best_split</code>, <code>_majority</code>) and a tiny
+<code>_Node</code> / <code>_Leaf</code> pair are in the full script. Run it on the
+moons dataset:</p>
+<pre><code>DEMO 1 --- Decision tree from scratch on the moons dataset
+  Training set : 400 examples, 2 features
+  Test set     : 100 examples
+  max_depth    : 6
+  Train accuracy : 0.963
+  Test accuracy  : 0.940
+  Tree depth     : 6   leaves : 19
+</code></pre>
+<pre><code>DEMO 2 --- Same data, scikit-learn DecisionTreeClassifier
+  Train accuracy : 0.963
+  Test accuracy  : 0.940
+  Tree depth     : 6   leaves : 19
+  Agreement with from-scratch tree on test set: 100/100 predictions identical
+</code></pre>
+<pre><code>DEMO 3 --- The depth-vs-overfitting tradeoff
+  depth   train_acc   test_acc   leaves
+  -----   ---------   --------   ------
+      1       0.823      0.840        2
+      2       0.907      0.930        4
+      3       0.907      0.930        6
+      4       0.907      0.930        9
+      6       0.963      0.940       19
+     10       0.990      0.930       34
+   None       1.000      0.930       39
+</code></pre>
+<p>The pattern in the depth sweep is the bias-variance story all
+over again. At depth 1 the tree is essentially a single
+threshold — high bias, both scores around 0.83. By depth 4 the
+tree has captured most of the moon-shape; train and test
+agree at 0.93. At depth 6 the test score peaks at 0.94. Past
+that, the train score climbs steadily towards 1.0 (the tree
+memorises the training set) while the test score <em>falls</em> —
+classic overfitting. The fully grown tree perfectly fits 400
+training examples in 39 leaves but generalises slightly worse
+than the depth-6 cap.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Three things are worth pulling out. <strong>Training is <code>O(n · d · depth)</code>
+in the typical case</strong> — at every depth level, every node has to
+score every candidate split, and each scoring step looks at all
+the data passing through it. Sorting the features once at the
+root and reusing the order brings it to that bound; naive
+implementations are an order worse. <strong>Prediction is <code>O(depth)</code>
+per example</strong> — a tiny constant on a balanced tree, often a few
+microseconds even on big data. <strong>Memory is <code>O(nodes)</code></strong> — the tree
+itself is small (kilobytes for a typical fitted tree), no matter
+how big the training set was.</p>
+<p>That last property is unusual and powerful: a fitted decision
+tree is a <em>compressed</em> model of the training data, which is the
+opposite of KNN&rsquo;s &ldquo;the data is the model&rdquo;. You can train on a
+million examples and ship a model that fits in a few hundred
+KB.</p>
+<hr />
+<h2>What trees give you for free</h2>
+<p>The reason decision trees keep showing up — and the reason their
+ensemble cousins win every other tabular ML benchmark — is a
+short list of properties no other simple model has all of at
+once:</p>
+<p><strong>No feature scaling required.</strong> A split is <code>feature ≤
+threshold</code>. Whether the feature is in millimetres or kilometres
+makes no difference; the algorithm picks the threshold to
+match. No standardisation, no normalisation. Compare with
+distance-based models (KNN), gradient-based linear models
+(logistic regression), and neural networks — all of which
+need careful preprocessing.</p>
+<p><strong>Mixed types and missing data.</strong> Categorical features can be
+handled with one-hot or with native categorical splits (CatBoost
+and LightGBM do this directly). Missing values can be sent down
+a default branch. None of this requires imputing or one-hot
+encoding upstream.</p>
+<p><strong>Non-linear interactions, automatically.</strong> A linear model has
+to be told about interactions (<code>x1 * x2</code>, <code>x1²</code>, etc.) by
+feature engineering. A tree discovers them by stacking splits.
+<em>If x1 ≤ 5 and x2 &gt; 3 then class A</em> is two splits deep — no
+feature engineering required.</p>
+<p><strong>Built-in feature importance.</strong> The total impurity decrease
+contributed by each feature, summed across all splits using it,
+is a free feature-importance score. You get an interpretable
+ranking of which features the model relied on without any extra
+work.</p>
+<p><strong>Interpretability — when the tree is small.</strong> A depth-3 tree
+with 8 leaves can be drawn on one page and read like a
+flowchart. Medical decision aids, credit-scoring rules, and
+quality-control protocols are still routinely deployed as
+hand-pruned shallow decision trees because a domain expert can
+look at one and say &ldquo;yes, that matches my intuition&rdquo; or &ldquo;no,
+splitting on age there is wrong&rdquo;.</p>
+<hr />
+<h2>The fundamental weakness</h2>
+<p>A single decision tree is greedy and local. It picks the locally
+best split at every node, never reconsiders, and never explores
+alternative trees. This has two unpleasant consequences:</p>
+<p><strong>High variance.</strong> A small change to the training data — drop a
+few rows, re-shuffle — can produce a <em>very</em> different tree,
+because a slightly different split at the root cascades into
+completely different children. Compared with linear models,
+trees are wildly unstable.</p>
+<p><strong>Greedy is not globally optimal.</strong> Finding the smallest
+decision tree consistent with the data is NP-hard. The greedy
+heuristic CART uses is fast and usually good but never
+guaranteed to be optimal, and the trees it produces sometimes
+miss obvious structure that a smarter search would find.</p>
+<p>The fix for both problems is the same: <strong>don&rsquo;t ship one tree;
+ship hundreds, and aggregate them</strong>. That is exactly what
+random forests, extra-trees, gradient boosting, and the modern
+GBM stack (XGBoost, LightGBM, CatBoost) all do. Each tree is
+still greedy and unstable, but the ensemble is stable, accurate,
+and frequently the best model on tabular data. The next track
+of this series — Advanced Supervised Learning — opens with
+Random Forests for exactly this reason.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>Decision trees and their ensembles are the workhorses of tabular
+machine learning:</p>
+<p><strong>Gradient-boosted trees on Kaggle and beyond.</strong> The dominant
+model class for tabular competitions for the last decade has
+been XGBoost, LightGBM, and (more recently) CatBoost — all
+ensembles of decision trees fit by gradient boosting. They
+routinely beat deep learning on tabular data of the kind
+businesses actually have.</p>
+<p><strong>Credit scoring, insurance underwriting, churn prediction.</strong>
+Regulated industries that need both accuracy and a readable
+model lean heavily on tree-based methods. A gradient-boosted
+ensemble plus per-feature SHAP values is the standard stack.</p>
+<p><strong>Medical decision support.</strong> From the Pediatric Appendicitis
+Score to APACHE-style ICU scoring rules, hand-pruned shallow
+decision trees are still in active clinical use. They are
+auditable, defensible, and explainable to a patient.</p>
+<p><strong>Random forests in computational biology and ecology.</strong> Random
+Forests (Breiman 2001) became the default classifier in
+bioinformatics and species-distribution modelling because they
+handle small-n high-d data with mixed types and missing values
+without complaining.</p>
+<p><strong>Surrogate / explainability models.</strong> When a complex black-box
+model (a deep neural net, a large GBM) needs to be explained,
+one common technique is to fit a small decision tree to mimic
+its predictions on a sample of inputs. The tree gives a
+human-readable approximation of the black box&rsquo;s behaviour.</p>
+<p><strong>Rule extraction for production systems.</strong> Some shipped systems
+take the <em>splits</em> learned by a tree and translate them into
+hand-edited business rules — keeping the model out of the
+serving path entirely. This is rare in modern ML but still
+common in compliance-heavy domains.</p>
+<p>The pattern: a single decision tree is rarely the production
+model in 2026, but a tree-based <em>ensemble</em> almost always is, on
+tabular data.</p>
+<hr />
+<h2>When NOT to use decision trees</h2>
+<p>Single decision trees are rarely the right shipping model.
+Specifically, walk away when:</p>
+<p><strong>The decision boundary is genuinely linear or smooth.</strong> A tree
+approximates a linear boundary with a staircase — many splits to
+get a so-so fit. Logistic regression beats a tree on truly
+linear problems with less data and a smoother boundary.</p>
+<p><strong>The data is high-dimensional and sparse.</strong> Text data
+represented as bag-of-words — thousands of features, mostly
+zero — is not tree territory. Linear models (logistic
+regression, SVM) and Naive Bayes dominate here, partly because
+each tree split touches one feature at a time and the search
+becomes wasteful.</p>
+<p><strong>You need a single, well-calibrated probability.</strong> Trees
+produce step-function probability estimates with limited
+resolution (each leaf is one bucket of training labels).
+Calibration on top, or a logistic regression instead, is often
+cleaner.</p>
+<p><strong>The data has structure trees can&rsquo;t see.</strong> Image pixels, audio
+samples, sequences — anything where adjacent features are
+strongly related and the model needs to learn a continuous
+function over them. Convolutions and attention beat trees on
+these problems by orders of magnitude.</p>
+<p><strong>You want a single shipping model and you are not bound to a
+single tree.</strong> Almost always, swap to a random forest or a
+gradient-boosted ensemble. A single tree is a teaching aid; a
+forest of trees is a model.</p>
+<hr />
+<h2>What comes next</h2>
+<p>This is the last article in the introductory Supervised Learning
+track. Part 6 begins <strong>Advanced Supervised Learning</strong> with
+<strong>Random Forests</strong> — the bagging ensemble that takes everything
+weak about a single decision tree and trades it for an averaged
+prediction that is stable, accurate, and almost as easy to fit
+as a single tree. Random forests will lead into gradient
+boosting (XGBoost, LightGBM, CatBoost) and then to support
+vector machines, rounding out the classical supervised toolkit
+before we move on to unsupervised learning.</p>
+<p>If you have followed the series from Linear Regression through
+Logistic Regression, Naive Bayes, KNN, and now Decision Trees,
+you have all five &ldquo;first models to try&rdquo; on a new tabular
+problem. The next track is what to reach for when those five
+are not enough.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/01-supervised-learning/05-decision-trees/decision_tree.py"><strong>decision_tree.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scikit-learn
+python decision_tree.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scikit-learn</code>. The script implements a
+CART-style decision tree from scratch, fits it to the
+two-moons dataset, compares against scikit-learn&rsquo;s
+<code>DecisionTreeClassifier</code> (the predictions agree on every test
+example), and runs a depth sweep that reproduces the textbook
+overfitting curve — train accuracy climbing to 1.0 while test
+accuracy peaks and then falls. The headline insight worth
+pinning to the wall: <strong>a decision tree is a flowchart whose
+questions were chosen by greedy impurity minimisation; a
+single tree overfits, but an ensemble of them is the dominant
+model class for tabular data</strong>.</p>
+<hr />
+<p><em>This is Part 5 of the Algorithms in Python series, Supervised Learning track. The companion script <code>decision_tree.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/bf60b8986801">Part 4</a> covered K-Nearest Neighbours. The next track — Advanced Supervised Learning — opens with Random Forests, the ensemble that takes a single tree&rsquo;s weaknesses and averages them away.</em></p>

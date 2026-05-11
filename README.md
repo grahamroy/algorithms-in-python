@@ -35,7 +35,7 @@ clear explanations and Python implementations.
 | 2 | Logistic Regression | ✅ |
 | 3 | Naive Bayes | ✅ |
 | 4 | K-Nearest Neighbours | ⬜ |
-| 5 | Decision Trees | ⬜ |
+| 5 | Decision Trees | ✅ |
 
 ### 02 — Advanced Supervised Learning
 | # | Algorithm | Status |
