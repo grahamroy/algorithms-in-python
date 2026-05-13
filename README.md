@@ -40,8 +40,8 @@ clear explanations and Python implementations.
 ### 02 — Advanced Supervised Learning
 | # | Algorithm | Status |
 |---|-----------|--------|
-| 1 | Random Forests | ⬜ |
-| 2 | Gradient Boosting (XGBoost / LightGBM / CatBoost) | ⬜ |
+| 1 | Random Forests | ✅ |
+| 2 | Gradient Boosting (XGBoost / LightGBM / CatBoost) | ✅ |
 | 3 | Support Vector Machines | ⬜ |
 
 ### 03 — Unsupervised Learning
