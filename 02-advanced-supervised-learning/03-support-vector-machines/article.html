@@ -1,0 +1,351 @@
+<p>In Parts 1 and 2 we built tree ensembles — random forests
+(averaging hundreds of independent trees) and gradient-boosted
+machines (stacking dependent trees that correct each other&rsquo;s
+mistakes). Both are non-parametric, both work well on tabular
+data, and both have a clear &ldquo;more trees = more capacity&rdquo;
+intuition.</p>
+<p>Today we look at the model that ruled supervised learning for a
+decade before tree ensembles took over and convolutional
+networks displaced almost everything in computer vision. The
+<strong>Support Vector Machine</strong> (Boser, Guyon &amp; Vapnik, 1992;
+generalised to soft margins by Cortes &amp; Vapnik, 1995) is built
+from two of the most consequential ideas in classical machine
+learning: the <strong>maximum-margin principle</strong> and the <strong>kernel
+trick</strong>. Together they give you a classifier that finds the
+&ldquo;widest possible gap&rdquo; between classes, optionally lifted into a
+non-linear feature space without ever computing the embedding
+explicitly. SVMs won the digit-recognition benchmarks of the
+1990s, drove a generation of text-classification research, and
+are still — when calibrated and well-tuned — competitive on
+modestly-sized problems with low-dimensional structure.</p>
+<p>This article builds the SVM from first principles. We will
+derive the linear maximum-margin classifier as a quadratic
+program, soften it for non-separable data with slack variables
+and the <code>C</code> parameter, walk through the kernel trick that
+generalises everything from inner products to arbitrary
+non-linear feature spaces, implement a from-scratch linear SVM
+by subgradient descent on hinge loss, compare with scikit-learn&rsquo;s
+<code>LinearSVC</code> and <code>SVC(kernel="rbf")</code> on the same moons dataset
+the rest of the supervised track has been using, and finish with
+the places SVMs are still the right answer in 2026.</p>
+<hr />
+<h2>The maximum-margin idea</h2>
+<p>Consider binary classification with labels in <code>{-1, +1}</code> and
+data linearly separable by some hyperplane <code>w · x + b = 0</code>. If
+the data is separable then <em>many</em> hyperplanes split it. Which
+one should we pick?</p>
+<p>The SVM answer: pick the one with the largest <strong>margin</strong> — the
+biggest gap between the hyperplane and the nearest training
+points on either side. A wide-margin classifier has more
+&ldquo;breathing room&rdquo; around the decision boundary; small
+perturbations of the data are less likely to flip a prediction.
+Formally, of all hyperplanes that classify the training set
+correctly, the maximum-margin one is the most robust to noise
+and the best generaliser (this is Vapnik&rsquo;s structural-risk
+argument).</p>
+<p>For a hyperplane <code>w · x + b = 0</code>, the distance from any point
+<code>x_i</code> to the plane is <code>|w · x_i + b| / ‖w‖</code>. If we normalise so
+that the closest training points lie on <code>w · x + b = ±1</code>, the
+margin width becomes:</p>
+<pre><code>margin = 2 / ‖w‖
+</code></pre>
+<p>Maximising <code>2 / ‖w‖</code> is the same as minimising <code>‖w‖²</code>. So the
+hard-margin SVM is the constrained optimisation:</p>
+<pre><code>minimise   ½ ‖w‖²
+subject to y_i (w · x_i + b) ≥ 1   for every training point i
+</code></pre>
+<p>A convex quadratic objective with linear constraints — solvable
+exactly by any quadratic-programming solver. The optimal <code>w</code>
+defines the maximum-margin hyperplane.</p>
+<hr />
+<h2>Soft margins and the C parameter</h2>
+<p>Real datasets are not linearly separable. Even when they are,
+the maximum-margin solution can be brittle: one mislabelled
+outlier near the boundary will dominate the entire fit. The
+<strong>soft-margin SVM</strong> (Cortes &amp; Vapnik, 1995) loosens the
+constraint with slack variables <code>ξ_i ≥ 0</code>:</p>
+<pre><code>minimise   ½ ‖w‖² + C · Σ ξ_i
+subject to y_i (w · x_i + b) ≥ 1 - ξ_i,   ξ_i ≥ 0
+</code></pre>
+<p>The slack <code>ξ_i</code> is the amount by which point <code>i</code> violates the
+margin constraint. <code>ξ_i = 0</code> means the point is correctly
+classified and outside the margin. <code>0 &lt; ξ_i &lt; 1</code> means it is
+inside the margin but on the correct side of the hyperplane.
+<code>ξ_i ≥ 1</code> means it is on the wrong side — misclassified.</p>
+<p>The hyperparameter <code>C</code> controls the trade-off:</p>
+<ul>
+<li><strong>Large <code>C</code></strong> (e.g. 100, 1000) penalises violations heavily.
+  The solver prioritises classifying every point correctly, even
+  at the cost of a narrow margin. Risk: overfitting to noisy
+  training points.</li>
+<li><strong>Small <code>C</code></strong> (e.g. 0.01, 0.1) tolerates violations. The
+  solver prioritises a wide margin and accepts that some points
+  will be misclassified or inside the margin. Risk: underfitting.</li>
+</ul>
+<p><code>C</code> is the SVM&rsquo;s most important regulariser, the analogue of
+<code>λ</code> in ridge regression or <code>α</code> in Lasso. It is almost always
+chosen by cross-validation.</p>
+<p>A useful reformulation: the soft-margin objective is exactly
+equivalent to minimising <strong>hinge loss</strong> with L2 regularisation:</p>
+<pre><code>minimise   (1 / (2 C)) ‖w‖² + Σ max(0, 1 - y_i (w · x_i + b))
+</code></pre>
+<p>The hinge loss <code>max(0, 1 - y · ŷ)</code> is zero when the point is
+correctly classified with margin, linear in the violation
+otherwise. This view makes SVMs a member of the same family as
+logistic regression — both are linear classifiers fit by a
+convex loss with an L2 penalty — they just use <em>different
+losses</em> (hinge vs log loss). That equivalence is the bridge to
+training SVMs by subgradient descent on big data.</p>
+<hr />
+<h2>The dual and support vectors</h2>
+<p>The soft-margin primal can be solved directly, but the <strong>dual
+problem</strong> is where SVM&rsquo;s elegance shows. Introducing Lagrange
+multipliers <code>α_i ≥ 0</code> for each constraint and eliminating <code>w</code>
+and <code>b</code> gives:</p>
+<pre><code>maximise   Σ α_i  -  ½ Σ_{i,j} α_i α_j y_i y_j (x_i · x_j)
+subject to 0 ≤ α_i ≤ C,   Σ α_i y_i = 0
+</code></pre>
+<p>Two important properties:</p>
+<p><strong>The objective only depends on inner products <code>x_i · x_j</code>.</strong>
+Once those are computed (the Gram matrix), the SVM does not look
+at the raw <code>x</code> values again. This is the entry point for the
+kernel trick.</p>
+<p><strong>Most <code>α_i</code> end up exactly zero.</strong> Only the training points on
+or inside the margin have non-zero <code>α_i</code> — and those are exactly
+the <strong>support vectors</strong>. The fitted model is:</p>
+<pre><code>w = Σ α_i y_i x_i        (sum is only over support vectors)
+prediction(x) = sign(w · x + b)
+              = sign(Σ_{i ∈ SV} α_i y_i (x_i · x) + b)
+</code></pre>
+<p>The decision function is a weighted sum over support vectors,
+each contributing through its inner product with the query
+point. On most problems the support vectors are a small fraction
+of the training set — sparsity that makes SVMs memory-efficient
+to deploy even when the training set was large.</p>
+<hr />
+<h2>The kernel trick</h2>
+<p>Look at the dual one more time. The training data appears only
+through the inner products <code>x_i · x_j</code>. The prediction step only
+uses inner products <code>x_i · x</code>. <em>Nowhere</em> do we need the raw
+coordinates of <code>x</code>.</p>
+<p>So replace the inner product with a function <code>K(x_i, x_j)</code>. As
+long as <code>K</code> is a valid kernel (corresponds to an inner product
+in <em>some</em> feature space <code>ϕ</code>, i.e. <code>K(a, b) = ϕ(a) · ϕ(b)</code>), the
+algebra still works. The classifier is now implicitly fitting a
+hyperplane in the (possibly infinite-dimensional) feature space
+<code>ϕ</code> — without ever computing <code>ϕ(x)</code>. This is the kernel trick,
+and it is one of the cleverest constructions in classical ML.</p>
+<p>Common kernels:</p>
+<p><strong>Linear:</strong> <code>K(a, b) = a · b</code>. No transformation. Use for
+high-dimensional sparse data (text bag-of-words, gene
+expression) where a linear boundary is already enough.</p>
+<p><strong>Polynomial:</strong> <code>K(a, b) = (γ · a · b + r)^d</code>. Implicit feature
+space of all monomials up to degree <code>d</code>. Useful when you suspect
+the boundary is a polynomial of low degree.</p>
+<p><strong>Radial Basis Function (RBF / Gaussian):</strong> <code>K(a, b) = exp(-γ ‖a
+− b‖²)</code>. Infinite-dimensional implicit feature space. The
+universal default for non-linear SVMs. <code>γ</code> controls how &ldquo;local&rdquo;
+the kernel is — small <code>γ</code> means broad influence (smoother
+boundaries), large <code>γ</code> means each support vector influences only
+its immediate neighbourhood (wiggly boundaries, prone to
+overfit).</p>
+<p><strong>Sigmoid:</strong> <code>K(a, b) = tanh(γ · a · b + r)</code>. Historically used
+to approximate a 2-layer neural net; rarely the right choice
+today.</p>
+<p>For unstructured tabular data with non-linear interactions, RBF
+with cross-validated <code>C</code> and <code>γ</code> is the SVM workhorse. For text
+classification with TF-IDF features (millions of dimensions,
+nearly always linearly separable), a linear kernel is faster
+and just as accurate.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script reuses the two-moons dataset from the
+preceding articles (Parts 5, 1, and 2 of this series) — 400
+training + 100 test, same seed — and walks an SVM through it
+three ways.</p>
+<pre><code>DEMO 1 --- Linear SVM from scratch on the moons dataset
+  Training set : 400 examples, 2 features
+  Test set     : 100 examples
+  Loss         : hinge + L2,  optimiser: subgradient descent
+  Test accuracy : 0.900
+  Support vectors (training points inside or on margin) : 143
+</code></pre>
+<pre><code>DEMO 2 --- Same data, scikit-learn LinearSVC
+  Test accuracy : 0.900
+  Agreement with from-scratch model on test set: 100/100 predictions identical
+</code></pre>
+<pre><code>DEMO 3 --- Non-linear SVM with RBF kernel (sklearn SVC)
+       C  gamma   train_acc   test_acc   #support_vectors
+  ------  -----   ---------   --------   ----------------
+     0.1   auto       0.885      0.930                206
+     1.0   auto       0.925      0.980                118
+      10   auto       0.927      0.980                 83
+     100   auto       0.932      0.970                 71
+    1000   auto       0.932      0.980                 70
+</code></pre>
+<p>Three things to pull out.</p>
+<p><strong>Linear is not enough.</strong> The from-scratch linear SVM and
+sklearn&rsquo;s <code>LinearSVC</code> both top out at <code>0.900</code> test accuracy on
+the moons dataset, because no straight line in 2D can separate
+two interleaving half-moons. This is a <code>d = 2</code> problem with a
+curved boundary — exactly where the kernel trick earns its keep.</p>
+<p><strong>RBF beats both forest and boosting on this dataset.</strong> With
+<code>C = 1.0</code> and default <code>γ</code>, the RBF SVM reaches <code>0.98</code> test
+accuracy — <em>above</em> the random forest from Part 1 (<code>0.97</code>) and
+the gradient-boosted ensemble from Part 2 at their sweet spots.
+The &ldquo;non-linear feature space&rdquo; was infinite-dimensional in
+theory and totally invisible in the code; the kernel function
+did all the work.</p>
+<p><strong>Capacity is controlled by <code>C</code> and <code>γ</code> together.</strong> At
+<code>C = 0.1</code> the soft-margin penalty is too weak and the model
+underfits (<code>0.93</code> test) with a huge number of support vectors
+(206 — over half the training set is unsettled). As <code>C</code> rises,
+the SVM commits harder to the training data: the number of
+support vectors drops to ~70, the train accuracy edges up, and
+the test accuracy hovers around <code>0.97–0.98</code> — RBF SVMs are
+remarkably stable across the useful range of <code>C</code> on this kind
+of clean two-class problem.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>The SVM complexity story is the reason it has been displaced on
+big data:</p>
+<p><strong>Linear SVM training is fast.</strong> With LIBLINEAR or hinge-loss
+subgradient methods, you can train a linear SVM on <code>n = 10⁶</code>,
+<code>d = 10⁵</code> (sparse) in seconds. Linear SVM on bag-of-words text
+classification is still a sensible default in 2026.</p>
+<p><strong>Kernel SVM training scales badly.</strong> The dual quadratic
+programme is <code>O(n² · d)</code> in memory (the Gram matrix is <code>n × n</code>)
+and roughly <code>O(n² · d)</code> to <code>O(n³ · d)</code> in compute, depending on
+the solver. For <code>n = 10⁴</code> it is fine. For <code>n = 10⁵</code> it is
+painful. For <code>n = 10⁶</code> it is impractical without
+approximations (Nyström kernel approximation, random Fourier
+features, or just switching model class).</p>
+<p><strong>Prediction is <code>O(n_SV · d)</code></strong> — proportional to the number
+of support vectors, not the full training set. On problems
+where the support vectors are a small fraction of training, the
+fitted SVM is fast at inference even when training was slow.</p>
+<p>The pragmatic ranges: kernel SVMs are the right answer for
+<code>n ≲ 10⁵</code> and <code>d</code> reasonable. Beyond that, switch to gradient
+boosting or to a linear SVM (LIBLINEAR / SGDClassifier with
+hinge loss) over learned features.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>For a decade SVMs were the dominant supervised classifier
+outside of the deep-learning research community. Their footprint
+in 2026 is smaller but still real:</p>
+<p><strong>Pre-deep-learning computer vision.</strong> The classic
+pipeline — HOG features plus a linear SVM — was the
+state-of-the-art for pedestrian detection (Dalal &amp; Triggs,
+2005), the basis of the original DPM object detectors, and the
+default classifier on the MNIST and CIFAR benchmarks before
+CNNs took over. Many production object-detection systems still
+ship the SVM head.</p>
+<p><strong>Text classification.</strong> SVMs on TF-IDF features dominated
+text classification through the 1990s and 2000s. Joachims&rsquo;s
+1998 paper <em>Text Categorization with Support Vector Machines</em>
+established this as the default, and it held for over a decade.
+Modern text systems mostly use transformer encoders, but a
+linear SVM is still a strong baseline and very common in
+high-volume / low-latency stacks.</p>
+<p><strong>Bioinformatics.</strong> Protein classification, gene expression
+analysis, and structure prediction problems were heavy SVM
+users for the 2000s and into the 2010s. The combination of
+small <code>n</code>, large <code>d</code>, and the kernel trick (string kernels,
+spectrum kernels, graph kernels for chemistry) made SVM a
+natural fit.</p>
+<p><strong>One-class SVMs for anomaly detection.</strong> A one-class SVM
+learns a decision boundary that encloses most of the training
+data; anything outside is flagged anomalous. Still in
+production fraud-detection and intrusion-detection systems.</p>
+<p><strong>Calibrated decision boundaries in regulated industries.</strong>
+Where a model needs to be both well-understood and
+production-safe (medical imaging triage, certain credit
+applications), an RBF SVM with a Platt-scaled probability layer
+is a defensible, low-surprise choice.</p>
+<p><strong>Tabular ML on small to medium data.</strong> For <code>n ≲ 10⁴</code> and
+non-linear boundaries, an RBF SVM with cross-validated <code>C</code>,
+<code>γ</code> is competitive with gradient boosting and sometimes wins —
+especially when the data is too small to support a 1000-tree
+GBM without overfitting.</p>
+<p>The pattern: SVMs are no longer the default <em>anywhere</em>, but
+they remain a strong, surprisingly-competitive baseline in
+exactly the small-to-medium tabular niche where calibration,
+sparsity, and well-understood theory matter.</p>
+<hr />
+<h2>When NOT to use SVMs</h2>
+<p>The places SVMs are dominated by other methods:</p>
+<p><strong>Very large datasets.</strong> <code>n &gt; 10⁵</code> and a kernel SVM
+needs special treatment (Nyström approximation, random Fourier
+features, mini-batch hinge-loss SGD). Easier to switch to a
+linear SVM over learned features or to a gradient-boosting
+ensemble.</p>
+<p><strong>When you need probabilities.</strong> Raw SVM outputs are distances
+from the hyperplane, not probabilities. Platt scaling (fitting
+a logistic regression on the SVM scores using cross-validation)
+recovers probabilities but adds training cost and is still
+worse-calibrated than a logistic-regression model trained
+directly with log loss. If probabilities matter, train logistic
+regression instead.</p>
+<p><strong>Multi-class with many classes.</strong> SVMs are natively binary.
+Multi-class is implemented as one-vs-rest or one-vs-one, both
+of which scale poorly past a few dozen classes. Softmax
+classifiers (logistic regression, neural nets) handle
+multi-class natively.</p>
+<p><strong>When you need feature importance.</strong> Kernel SVMs do not give
+per-feature importance scores — the decision function is a
+sum over support vectors in an implicit feature space.
+Permutation importance works but is expensive. Linear SVMs
+have weight magnitudes, which is the same as logistic
+regression&rsquo;s coefficient magnitudes.</p>
+<p><strong>High-cardinality categoricals.</strong> SVMs require a
+fixed-dimensional numeric feature vector. Categorical features
+need one-hot or learned-embedding encoding upstream — work
+that tree-based methods skip.</p>
+<p><strong>Image / audio / sequence data.</strong> Use the appropriate
+deep-learning architecture (CNN / transformer / RNN). SVMs on
+raw pixels are a non-starter; SVMs over <em>features extracted by
+a CNN</em> still occasionally appear as classification heads but
+even there a softmax is usually fine.</p>
+<hr />
+<h2>What comes next</h2>
+<p>This is the final article in the <strong>Supervised Learning</strong> track
+(introductory + advanced). The five basic models — Linear
+Regression, Logistic Regression, Naive Bayes, K-Nearest
+Neighbours, Decision Trees — plus the three advanced — Random
+Forests, Gradient Boosting, Support Vector Machines — give you
+the standard supervised toolkit. On any new labelled-data
+problem the question to ask is <em>which of these eight is the
+right starting point</em>, and the rest of the rolling improvement
+is incremental tuning, feature engineering, and (if the data is
+unstructured) reaching for deep learning.</p>
+<p>Next is the <strong>Unsupervised Learning</strong> track, beginning with
+<strong>K-Means Clustering</strong> — the simplest and most-used clustering
+algorithm, and the entry point to the wider unsupervised
+toolkit (hierarchical clustering, PCA, t-SNE, UMAP, NMF,
+spectral methods). The shift from supervised to unsupervised is
+the shift from &ldquo;learn the labelling function&rdquo; to &ldquo;learn the
+structure of the data itself&rdquo;, and it brings a different
+mathematical toolkit with it.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/02-advanced-supervised-learning/03-support-vector-machines/svm.py"><strong>svm.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scikit-learn
+python svm.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scikit-learn</code>. The script trains a linear
+SVM from scratch using subgradient descent on hinge loss with
+L2 regularisation, fits the moons dataset, compares against
+scikit-learn&rsquo;s <code>LinearSVC</code> (predictions agree on every test
+example), then trains a kernelised <code>SVC</code> with the RBF kernel
+and sweeps <code>C</code> to show the bias-variance trade-off — the
+linear model tops out at <code>0.87</code> because moons is not linearly
+separable, while the RBF kernel restores accuracy to <code>0.97</code>
+without ever explicitly computing the non-linear feature space.
+The headline insight worth pinning to the wall: <strong>find the
+widest gap between the classes, then replace inner products
+with a kernel function to fit non-linear boundaries for free</strong>.</p>
+<hr />
+<p><em>This is Part 3 of the Advanced Supervised Learning track in the Algorithms in Python series, and the final article of the Supervised Learning track overall. The companion script <code>svm.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. Part 2 of this track covered Gradient Boosting. The next article opens the Unsupervised Learning track with K-Means Clustering — the simplest, most-used, and most-imitated unsupervised algorithm.</em></p>

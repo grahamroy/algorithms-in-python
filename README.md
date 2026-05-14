@@ -42,7 +42,7 @@ clear explanations and Python implementations.
 |---|-----------|--------|
 | 1 | Random Forests | ✅ |
 | 2 | Gradient Boosting (XGBoost / LightGBM / CatBoost) | ✅ |
-| 3 | Support Vector Machines | ⬜ |
+| 3 | Support Vector Machines | ✅ |
 
 ### 03 — Unsupervised Learning
 | # | Algorithm | Status |
