@@ -1,0 +1,392 @@
+<p>The supervised-learning track is behind us. From linear
+regression to support vector machines, every algorithm we built
+shared the same problem setup: each training example came with
+a label <code>y</code>, and the model&rsquo;s job was to learn the mapping
+<code>x ↦ y</code>. Today the labels go away.</p>
+<p>In <strong>unsupervised learning</strong> the algorithm sees only <code>X</code> and has
+to discover the structure of the data on its own — which points
+group together, which directions in feature space carry the
+most variance, which examples are outliers, which features are
+redundant. There is no <code>y</code> to score against, no accuracy on a
+held-out set, no neat right-or-wrong answer. The success
+criterion is itself part of the problem definition.</p>
+<p>The classic entry point to unsupervised learning is <strong>K-Means
+Clustering</strong>. Pick a number of clusters <code>K</code>. Drop <code>K</code> centroids
+into the feature space. Assign every data point to the nearest
+centroid. Recompute each centroid as the mean of the points
+assigned to it. Repeat until the assignments stop changing. The
+algorithm — Lloyd&rsquo;s algorithm, named after Stuart Lloyd&rsquo;s
+unpublished 1957 Bell Labs memo and the published 1982 version
+— is so simple it fits in fifteen lines of numpy, and so
+useful that it has been re-invented in every applied field that
+ever needed to group things.</p>
+<p>This article builds K-Means from first principles. We will
+derive Lloyd&rsquo;s algorithm, explain why the initial centroid
+placement matters and how <code>k-means++</code> fixes it, walk through
+the objective the algorithm is actually minimising (and where
+that objective leads it astray), implement it from scratch,
+compare with scikit-learn&rsquo;s <code>KMeans</code>, and finish with the
+surprisingly long list of places K-Means is <em>quietly</em> doing
+real work — image compression, vector quantisation, the IVF
+index inside every vector database, customer segmentation, and
+the initialisation step of half of the more sophisticated
+clustering and density-estimation algorithms.</p>
+<hr />
+<h2>The algorithm</h2>
+<p>Given data <code>X</code> with <code>n</code> rows in <code>d</code> dimensions and a chosen
+number of clusters <code>K</code>, Lloyd&rsquo;s algorithm alternates two steps
+until convergence.</p>
+<p><strong>Step 1 — Assignment.</strong> For each point <code>x_i</code>, find the
+nearest centroid <code>μ_k</code> (by Euclidean distance) and assign the
+point to cluster <code>k</code>.</p>
+<pre><code>for i in 1..n:
+    cluster[i] = argmin_k  ‖x_i − μ_k‖²
+</code></pre>
+<p><strong>Step 2 — Update.</strong> For each cluster <code>k</code>, recompute its
+centroid as the mean of the points currently assigned to it.</p>
+<pre><code>for k in 1..K:
+    μ_k = mean(x_i for i in cluster k)
+</code></pre>
+<p>Iterate Step 1 then Step 2 until the assignments stop changing
+(or a maximum iteration count is hit). The output is <code>K</code>
+centroids and a cluster label <code>1..K</code> for every input point.</p>
+<p>The whole algorithm is:</p>
+<pre><code>fit(X, K, max_iter):
+    μ = initialise K centroids (see below)
+    for iter in 1..max_iter:
+        old_clusters = clusters
+        clusters = assign(X, μ)        # Step 1
+        μ = recompute(X, clusters)     # Step 2
+        if clusters == old_clusters:
+            break
+    return μ, clusters
+</code></pre>
+<p>That is the entire algorithm. No gradient, no learning rate, no
+loss landscape — just alternation between two cheap operations
+that each have a closed-form solution given the other.</p>
+<hr />
+<h2>What is actually being minimised?</h2>
+<p>K-Means looks heuristic, but it is doing coordinate descent on
+a perfectly well-defined objective: the <strong>within-cluster sum
+of squares</strong> (WCSS), also called <em>inertia</em>:</p>
+<pre><code>J(μ, clusters) = Σ_k  Σ_{i ∈ cluster k}  ‖x_i − μ_k‖²
+</code></pre>
+<p>Read this as: for each cluster, sum the squared distance from
+every member to that cluster&rsquo;s centroid; then sum across
+clusters. Lower <code>J</code> means tighter, more compact clusters.</p>
+<p>Lloyd&rsquo;s algorithm minimises <code>J</code> by alternating optimisation
+over its two variable groups:</p>
+<ul>
+<li><strong>Fix <code>μ</code>, optimise clusters.</strong> Each point&rsquo;s contribution
+  <code>‖x_i − μ_k‖²</code> is minimised by assigning it to the closest
+  centroid. That is exactly Step 1.</li>
+<li><strong>Fix clusters, optimise <code>μ</code>.</strong> For each cluster the sum
+  <code>Σ ‖x_i − μ_k‖²</code> is minimised (over <code>μ_k</code>) by setting <code>μ_k</code>
+  to the mean of the assigned points. That is exactly Step 2.</li>
+</ul>
+<p>Because each step is a <em>minimiser</em> of <code>J</code> (given the other
+variable held fixed), <code>J</code> is guaranteed to decrease at every
+iteration. The algorithm always converges — in a finite number
+of steps, since there are finitely many possible assignments.</p>
+<p>But it converges to a <strong>local</strong> minimum of <code>J</code>, not the global
+one. The objective <code>J</code> is non-convex in <code>μ</code> (the
+cluster-assignment choice is combinatorial), and Lloyd&rsquo;s
+algorithm can settle into bad local minima if the initial
+centroids are placed badly. Which is why the initialisation
+step matters more than the algorithm itself.</p>
+<hr />
+<h2>Initialisation matters — <code>k-means++</code></h2>
+<p>The simplest initialisation is to pick <code>K</code> random data points
+as the initial centroids. It works most of the time, but on
+adversarial inputs (long thin clusters, very different sizes,
+or rare classes) it can land in dramatically suboptimal local
+minima. Multiple restarts (sklearn&rsquo;s <code>n_init</code>) help by running
+the whole thing many times and keeping the best, but each
+restart costs a full convergence.</p>
+<p><strong>k-means++</strong> (Arthur &amp; Vassilvitskii, 2007) is a smarter
+initialisation that spreads the initial centroids out before
+Lloyd&rsquo;s algorithm runs:</p>
+<pre><code>1. Pick the first centroid uniformly at random from the data.
+2. For each subsequent centroid k = 2..K:
+   - Compute D(x) = distance from each point to its nearest
+     already-chosen centroid.
+   - Pick the next centroid by sampling a data point with
+     probability proportional to D(x)².
+</code></pre>
+<p>Points far from the existing centroids are exponentially more
+likely to be chosen as new centroids. The squared-distance
+weighting means that any region of the dataset not yet covered
+by a centroid is overwhelmingly likely to attract one. After
+<code>K</code> iterations of this rule, the initial centroids are
+well-spread and Lloyd&rsquo;s algorithm typically converges quickly
+to a near-global minimum.</p>
+<p>Arthur &amp; Vassilvitskii proved that k-means++ gives an
+<em>expected</em> <code>O(log K)</code>-competitive solution with respect to the
+optimal — a remarkable result given how cheap the procedure is.
+In practice, k-means++ is so much better than random init that
+it has been the default in sklearn (and every other major
+library) for over a decade.</p>
+<hr />
+<h2>The hard problem: picking K</h2>
+<p>Lloyd&rsquo;s algorithm tells you the best partition into <code>K</code>
+clusters. It does not tell you what <code>K</code> should be. Picking <code>K</code>
+is the central practical difficulty of K-Means and the source
+of most of the &ldquo;K-Means doesn&rsquo;t work for my data&rdquo; stories that
+people tell at meetups.</p>
+<p>A handful of standard tools:</p>
+<p><strong>Elbow method.</strong> Plot the WCSS objective <code>J</code> as a function of
+<code>K</code>. As <code>K</code> increases, <code>J</code> decreases monotonically (more
+clusters = tighter clusters = lower WCSS). The &ldquo;elbow&rdquo; is the
+value of <code>K</code> past which adding another cluster barely reduces
+<code>J</code>. Reading off the elbow is subjective and works best when
+the true <code>K</code> is small (2 to 6) and the clusters are
+well-separated. On real data the elbow is often ambiguous.</p>
+<p><strong>Silhouette score.</strong> For each point, compute <code>(b − a) / max(a, b)</code>
+where <code>a</code> is the mean distance to other points in the same
+cluster and <code>b</code> is the mean distance to points in the nearest
+other cluster. The score is in <code>[-1, +1]</code>; higher is better.
+Average across the dataset to get a single quality number for
+each <code>K</code>. Pick the <code>K</code> with the highest silhouette. Works
+better than the elbow on ambiguous data but is expensive on
+large <code>n</code>.</p>
+<p><strong>Gap statistic</strong> (Tibshirani et al, 2001). Compare the WCSS
+of your data at each <code>K</code> to the WCSS of uniform-random data of
+the same shape, also clustered at each <code>K</code>. The optimal <code>K</code> is
+the one with the largest gap between observed and reference
+WCSS. Theoretically principled but computationally heavy.</p>
+<p><strong>Davies–Bouldin index</strong>, <strong>Calinski–Harabasz</strong>, <strong>BIC</strong> (after
+fitting a GMM rather than K-Means) — all variations on the
+same theme: pick the <code>K</code> that balances cluster tightness
+against cluster separation.</p>
+<p>Honest summary: every one of these gives an answer, and the
+answers disagree on real data. The pragmatic recipe is to use
+the elbow as a starting hypothesis, run a silhouette score to
+confirm, and reach for domain knowledge to break ties. K is
+ultimately a <em>choice</em> — and the right choice depends on what
+you intend to <em>do</em> with the clusters.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script generates a 3-cluster Gaussian-blob
+dataset, fits a from-scratch K-Means with k-means++ init,
+compares against scikit-learn&rsquo;s <code>KMeans</code>, and finishes with an
+elbow plot in tabular form.</p>
+<pre><code>DEMO 1 --- K-Means from scratch on Gaussian blobs
+  Data shape : 600 points, 2 features
+  True K     : 3
+  Chosen K   : 3
+  Init       : k-means++
+  Converged in 2 iterations
+  Final inertia (WCSS) : 918.7
+  Adjusted Rand Index vs true labels : 1.000
+</code></pre>
+<pre><code>DEMO 2 --- Same data, scikit-learn KMeans
+  Converged in 2 iterations
+  Final inertia (WCSS) : 918.7
+  Adjusted Rand Index vs true labels : 1.000
+  Agreement (ARI) between from-scratch and sklearn: 1.000
+</code></pre>
+<pre><code>DEMO 3 --- Elbow method: WCSS vs K
+     K       WCSS
+   ---   --------
+     2     4598.9
+     3      918.7
+     4      819.1
+     5      711.8
+     6      639.9
+     7      560.2
+     8      449.0
+</code></pre>
+<p>The Adjusted Rand Index (ARI) compares the clustering against
+the true labels we secretly generated the data with. ARI of
+<code>1.000</code> means the clusters are <em>exactly</em> the ground truth up
+to relabelling — perfect recovery, which is the easy outcome
+you expect on a clean 3-blob problem with good initialisation.</p>
+<p>The elbow plot in Demo 3 is textbook. From <code>K = 2</code> to <code>K = 3</code>
+the WCSS drops by 80% (<code>4599 → 919</code>) — adding the third
+cluster genuinely captures a third group in the data. From
+<code>K = 3</code> onwards each additional cluster reduces WCSS by only
+10–15% — the algorithm is now slicing already-tight blobs into
+sub-blobs, which costs degrees of freedom for marginal return.
+The elbow at <code>K = 3</code> is unambiguous. On real data it usually
+is not.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>K-Means is cheap. Each iteration is <code>O(n · K · d)</code> — every
+point computes its distance to every centroid, every centroid
+recomputes from its assigned points. Lloyd&rsquo;s algorithm
+typically converges in 10 to 50 iterations, even on large
+datasets, so total cost is <code>O(I · n · K · d)</code> with <code>I</code> small.
+Compare against tree ensembles (<code>O(N · n · d · depth)</code> for
+training a forest of <code>N</code> trees) or kernel SVMs (<code>O(n²)</code> or
+worse): K-Means is one of the cheapest non-trivial algorithms
+in machine learning.</p>
+<p>For very large <code>n</code> there is <strong>mini-batch K-Means</strong> (Sculley,
+2010), which updates centroids on small random batches rather
+than recomputing the full means each iteration. Sub-linear in
+the dataset size and converges quickly. It is the workhorse
+implementation behind <code>MiniBatchKMeans</code> and the basis for
+streaming clustering at scale.</p>
+<hr />
+<h2>What K-Means quietly assumes</h2>
+<p>The reason K-Means is &ldquo;most misused&rdquo; is that it makes four
+quiet assumptions about the data that are routinely violated:</p>
+<p><strong>Clusters are spherical.</strong> Lloyd&rsquo;s algorithm uses Euclidean
+distance, which is rotation-invariant but not scale-invariant.
+A cluster that is genuinely elongated along one direction (a
+narrow cigar shape, not a sphere) will be carved up into
+multiple K-Means clusters even though it should obviously be
+one. The fix is feature standardisation, or — if that does not
+help — switching to a model class that handles non-spherical
+clusters (Gaussian Mixture Models with full covariance,
+DBSCAN, spectral clustering).</p>
+<p><strong>Clusters are roughly equal-size.</strong> The means-based update
+gives every point equal weight in its cluster&rsquo;s centroid. If
+one true cluster has 10× as many points as another, the larger
+cluster&rsquo;s centroid will be pulled toward its own centre and
+will tend to absorb the nearby smaller cluster. Subsampling
+the larger cluster, or switching to Gaussian Mixture Models
+(which model cluster size explicitly via mixing weights), fixes
+this.</p>
+<p><strong>Clusters have similar variance.</strong> A cluster with high
+variance (&ldquo;noisy&rdquo;) and a cluster with low variance (&ldquo;tight&rdquo;)
+side by side: Euclidean distance puts roughly equal weight on
+both, but the noisy cluster&rsquo;s true membership will spread far
+into the tight cluster&rsquo;s territory and absorb its outliers.</p>
+<p><strong>There are no obvious outliers.</strong> A single far-away point will
+become its own centroid in any restart that happens to seed on
+it, distorting the rest of the assignment. Remove outliers
+upstream or use a robust variant (k-medoids, which uses medians
+or actual data points as centres rather than means).</p>
+<p>When these assumptions fail, the answer is usually not &ldquo;tweak
+K-Means parameters&rdquo; — it is &ldquo;use a different clustering
+algorithm&rdquo;. The next article in this track (Hierarchical
+Clustering) handles unequal-size clusters; Part 4 (t-SNE) and
+Part 5 (UMAP) are visualisation tools that often reveal cluster
+structure K-Means alone misses; Part 7 (Spectral Clustering)
+and the DBSCAN article in track 04 handle non-convex shapes.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>K-Means is one of the most-deployed unsupervised algorithms,
+usually hiding inside something else:</p>
+<p><strong>Image compression and colour quantisation.</strong> Run K-Means with
+<code>K = 16</code> or <code>K = 256</code> on the pixels of an image (treating each
+pixel as a 3-vector of RGB values). Replace every pixel with
+its assigned centroid. The result is a palette-quantised image
+indistinguishable from the original at common bit depths, with
+a much smaller storage footprint. This is the classical
+<strong>Lloyd–Max quantiser</strong> (and Lloyd&rsquo;s algorithm is named after
+exactly this application).</p>
+<p><strong>Vector quantisation for compression.</strong> Long predates ML —
+LBG (Linde–Buzo–Gray, 1980) is K-Means for vector quantisation
+in audio compression. Modern codecs (Opus, AAC) still use VQ
+codebooks derived from K-Means-like procedures.</p>
+<p><strong>Inverted file (IVF) index for vector databases.</strong> Foundations
+Part 12 (Vector Indexes) introduced IVF as the workhorse
+&ldquo;coarse quantiser&rdquo; inside FAISS and other vector databases.
+The &ldquo;training&rdquo; step of IVF is K-Means on the database vectors,
+producing <code>K = √N</code> (or so) centroids that partition the space.
+Queries find the nearest centroids, then search only those
+partitions. The big idea behind every modern vector DB has
+K-Means at the bottom.</p>
+<p><strong>Customer segmentation.</strong> The most common business-analytics
+use case. RFM (Recency, Frequency, Monetary) feature
+engineering followed by K-Means on the resulting 3D feature
+space, with <code>K = 4</code> or <code>K = 5</code> chosen by elbow, gives the
+canonical &ldquo;VIPs / loyal / new / lapsed / churned&rdquo; customer
+segments that drive marketing decisions. Probably the most
+economically valuable single application of K-Means.</p>
+<p><strong>Document and word clustering.</strong> K-Means on TF-IDF vectors
+(or, more recently, sentence-embedding vectors) is the
+default approach to topic discovery on a document collection
+when LDA is overkill and supervised classification is
+unavailable. The same approach powers RAG-pipeline chunk
+clustering for retrieval optimisation.</p>
+<p><strong>Initialisation for harder algorithms.</strong> Gaussian Mixture
+Models are typically initialised with K-Means centroids
+(sklearn&rsquo;s default). Self-organising maps, several
+deep-learning quantisation methods (Product Quantisation in
+Foundations Part 12, VQ-VAEs, residual vector quantisation in
+modern audio codecs like SoundStream) all use K-Means as the
+training step for their codebooks.</p>
+<p><strong>Anomaly detection.</strong> Distance to the nearest cluster centroid
+is a cheap, interpretable anomaly score. Points far from every
+centroid are unusual relative to the modelled structure of the
+&ldquo;normal&rdquo; data.</p>
+<p>The pattern: K-Means is rarely the headline algorithm in
+production. But it is almost always the workhorse at the
+bottom of something more interesting — and a non-trivial
+fraction of the world&rsquo;s running ML systems contain a K-Means
+step somewhere in their pipeline.</p>
+<hr />
+<h2>When NOT to use K-Means</h2>
+<p>The places K-Means is the wrong tool:</p>
+<p><strong>Non-convex / elongated / nested clusters.</strong> Two interleaving
+half-moons (the dataset we used through the supervised track)
+have two genuine clusters, but K-Means with <code>K = 2</code> will draw
+a straight line through them and produce two perfectly-wrong
+clusters. Use DBSCAN, spectral clustering, or a Gaussian
+mixture with full covariance.</p>
+<p><strong>Clusters of very different sizes.</strong> A dominant class plus a
+rare class is a hard problem for K-Means. The rare class either
+gets absorbed into the nearest dominant cluster or gets its own
+centroid by luck. Either way, the rare class is under-served.</p>
+<p><strong>High-dimensional sparse data.</strong> Bag-of-words and similar
+sparse vectors are not Euclidean-friendly. Euclidean distance
+between two sparse vectors is dominated by their lengths
+rather than their semantic similarity. Switch to cosine
+distance (spherical K-Means) or to clustering algorithms
+designed for sparse data.</p>
+<p><strong>When you don&rsquo;t know K and the elbow is ambiguous.</strong> If the
+elbow plot does not have a clean elbow and the silhouette
+disagrees, K-Means is asking you a question you cannot answer.
+Try <strong>hierarchical clustering</strong> (no <code>K</code> required, returns a
+dendrogram you can cut at any level) or <strong>DBSCAN</strong> (decides
+clusters by density, not by <code>K</code>).</p>
+<p><strong>When the cluster assignments need to be probabilistic.</strong>
+K-Means gives hard assignments. If you want &ldquo;this point is 70%
+cluster A and 30% cluster B&rdquo; — use a Gaussian Mixture Model
+fit by EM, which gives soft per-cluster probabilities.</p>
+<p><strong>Categorical or mixed data.</strong> K-Means&rsquo; mean update only makes
+sense for continuous features. For categorical data use
+<strong>K-modes</strong> (mode update instead of mean) or <strong>K-prototypes</strong>
+(mix of K-Means and K-modes for mixed data types).</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 2 of the Unsupervised Learning track is <strong>Hierarchical
+Clustering</strong> — the family of algorithms that build a tree (the
+<em>dendrogram</em>) of cluster merges and let you choose <code>K</code> <em>after</em>
+fitting by cutting the tree at any level. Hierarchical
+clustering handles unequal-size clusters more gracefully than
+K-Means, makes no assumption about the number of clusters, and
+produces a much richer summary of the data&rsquo;s structure — at the
+cost of being substantially slower (<code>O(n² log n)</code> for the
+classical agglomerative version).</p>
+<p>After hierarchical clustering, the unsupervised track turns to
+<strong>dimensionality reduction</strong> with PCA, t-SNE, and UMAP — three
+algorithms that compress high-dimensional data into 2D for
+visualisation and downstream analysis. Then DBSCAN for
+density-based clustering, Gaussian Mixture Models for soft
+probabilistic clusters, and the rest of the unsupervised
+toolkit.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/03-unsupervised-learning/01-k-means-clustering/k_means.py"><strong>k_means.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scikit-learn
+python k_means.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scikit-learn</code>. The script implements
+Lloyd&rsquo;s algorithm with <code>k-means++</code> initialisation from scratch,
+fits it to a 3-cluster Gaussian-blob dataset, compares against
+scikit-learn&rsquo;s <code>KMeans</code> (clusters agree perfectly up to
+relabelling), and walks through an elbow plot in tabular form
+that shows the unambiguous <code>K = 3</code> answer for this dataset. The
+headline insight worth pinning to the wall: <strong>K-Means is
+coordinate descent on within-cluster sum of squares; it works
+beautifully on spherical, equal-size clusters with k-means++
+initialisation, and fails on everything else — which is most
+real-world data</strong>.</p>
+<hr />
+<p><em>This is Part 1 of the Unsupervised Learning track in the Algorithms in Python series, and the first article after the supervised track concluded. The companion script <code>k_means.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. The previous article (the final supervised one) covered Support Vector Machines. Part 2 of this track will look at Hierarchical Clustering — the algorithm family that builds a tree of cluster merges and lets you pick <code>K</code> after fitting.</em></p>

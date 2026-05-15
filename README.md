@@ -47,7 +47,7 @@ clear explanations and Python implementations.
 ### 03 — Unsupervised Learning
 | # | Algorithm | Status |
 |---|-----------|--------|
-| 1 | K-Means Clustering | ⬜ |
+| 1 | K-Means Clustering | ✅ |
 | 2 | Hierarchical Clustering | ⬜ |
 | 3 | Principal Component Analysis (PCA) | ⬜ |
 | 4 | t-SNE | ⬜ |
