@@ -48,7 +48,7 @@ clear explanations and Python implementations.
 | # | Algorithm | Status |
 |---|-----------|--------|
 | 1 | K-Means Clustering | ✅ |
-| 2 | Hierarchical Clustering | ⬜ |
+| 2 | Hierarchical Clustering | ✅ |
 | 3 | Principal Component Analysis (PCA) | ⬜ |
 | 4 | t-SNE | ⬜ |
 | 5 | UMAP | ⬜ |

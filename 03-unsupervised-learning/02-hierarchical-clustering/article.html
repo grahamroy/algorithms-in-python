@@ -1,0 +1,323 @@
+<p>In Part 1 we built K-Means: pick <code>K</code>, drop <code>K</code> centroids,
+iterate Lloyd&rsquo;s algorithm until convergence. The whole thing
+was elegant and fast — but it forced us to commit to a value
+of <code>K</code> <em>before</em> looking at the data. The elbow method, the
+silhouette score, the gap statistic all helped us pick <code>K</code>,
+but they were post-hoc tools layered on top of an algorithm
+that had already made the choice for us.</p>
+<p><strong>Hierarchical Clustering</strong> turns the problem inside out. It
+does not ask you for <code>K</code>. Instead it builds a <em>tree</em> — the
+<strong>dendrogram</strong> — that records every possible clustering of the
+data, from one cluster of size <code>n</code> down to <code>n</code> clusters of size
+one. You inspect the tree, find the level that looks right for
+your problem, cut horizontally, and read off the clusters.
+Picking <code>K</code> becomes a choice you make <em>after</em> you have seen
+the structure of the data, not before.</p>
+<p>The classical algorithm — agglomerative hierarchical clustering
+— pre-dates K-Means and is older than computational statistics
+itself. Sokal &amp; Sneath formalised it for biological taxonomy in
+their 1963 textbook <em>Principles of Numerical Taxonomy</em>. It is
+still the default clustering method in genomics, phylogenetics,
+single-cell biology, and any field where the cluster <em>hierarchy</em>
+itself carries scientific meaning. The cost is computational:
+hierarchical clustering is <code>O(n²)</code> in memory and at best
+<code>O(n² log n)</code> in time, which puts a hard ceiling of roughly
+<code>n ≈ 10⁴</code> on the dataset sizes it handles cleanly.</p>
+<p>This article builds agglomerative clustering from first
+principles. We will walk through the four standard <em>linkage
+criteria</em> (single, complete, average, Ward), implement
+agglomerative clustering from scratch, plot a dendrogram, cut
+it at different heights to recover different clusterings,
+compare with scikit-learn&rsquo;s <code>AgglomerativeClustering</code>, and
+finish with the places hierarchical clustering is the right
+tool — and the (large) places it is not.</p>
+<hr />
+<h2>Agglomerative clustering — bottom-up</h2>
+<p>The most-used hierarchical algorithm is <strong>agglomerative</strong>: start
+with every point as its own singleton cluster, repeatedly merge
+the two closest clusters, stop when only one cluster remains.</p>
+<pre><code>agglomerative(X):
+    clusters = [[i] for i in range(n)]   # singletons
+    merges = []
+    while len(clusters) &gt; 1:
+        i, j = argmin over pairs (a, b) of distance(clusters[a], clusters[b])
+        merge_distance = distance(clusters[i], clusters[j])
+        merges.append((i, j, merge_distance))
+        clusters[i] = clusters[i] + clusters[j]
+        delete clusters[j]
+    return merges
+</code></pre>
+<p>The <code>merges</code> list — <code>n - 1</code> triples <code>(cluster_a, cluster_b,
+distance)</code> — is the dendrogram. It records the entire merge
+history. Cutting the dendrogram at any height <code>h</code> is equivalent
+to undoing every merge with <code>merge_distance &gt; h</code>, which leaves
+you with whatever clusters existed just before that height.</p>
+<p>The whole algorithm hinges on what <code>distance(cluster_a,
+cluster_b)</code> means — the <strong>linkage criterion</strong>.</p>
+<hr />
+<h2>Four ways to measure cluster distance</h2>
+<p>The Euclidean distance between two <em>points</em> is unambiguous. The
+distance between two <em>clusters</em> of points is not — and this is
+where the four standard linkage criteria come from.</p>
+<p><strong>Single linkage</strong> — distance between the two <em>closest</em> points,
+one from each cluster:</p>
+<pre><code>d_single(A, B) = min { ‖a - b‖ : a ∈ A, b ∈ B }
+</code></pre>
+<p>Captures &ldquo;are these two clusters touching anywhere?&rdquo; Tends to
+produce long, chain-like clusters when points form curved or
+elongated structures — a feature on data with non-convex shapes,
+a bug (&ldquo;chaining&rdquo;) on noisy data where a few intermediate points
+can stitch two unrelated clusters together.</p>
+<p><strong>Complete linkage</strong> — distance between the two <em>farthest</em>
+points:</p>
+<pre><code>d_complete(A, B) = max { ‖a - b‖ : a ∈ A, b ∈ B }
+</code></pre>
+<p>Conservative: refuses to merge two clusters until every pair
+across them is reasonably close. Produces compact, roughly
+spherical clusters but is sensitive to outliers (one far-away
+point inflates every distance involving its cluster).</p>
+<p><strong>Average linkage</strong> — average of all pairwise distances:</p>
+<pre><code>d_average(A, B) = mean { ‖a - b‖ : a ∈ A, b ∈ B }
+</code></pre>
+<p>A compromise between single and complete — less prone to
+chaining than single, less outlier-sensitive than complete.
+Often a sensible default when you have no prior reason to
+prefer the others.</p>
+<p><strong>Ward linkage</strong> — minimises the <em>increase in within-cluster
+sum of squares</em> caused by the merge:</p>
+<pre><code>d_ward(A, B) = (|A| · |B|) / (|A| + |B|)  ·  ‖μ_A − μ_B‖²
+</code></pre>
+<p>This is the agglomerative analogue of K-Means&rsquo; objective. Ward
+linkage tends to produce balanced, compact, roughly equal-size
+clusters and is the default in scikit-learn. It is the
+linkage to reach for when you want the dendrogram to look like
+something K-Means would produce — but with the freedom to pick
+<code>K</code> after seeing the merge history.</p>
+<p>The choice of linkage matters as much as the choice of distance
+metric. Same data + same algorithm + different linkage = often
+substantially different clusterings.</p>
+<hr />
+<h2>The dendrogram</h2>
+<p>The dendrogram is a binary tree drawn with the <em>merge distance</em>
+on the y-axis. Every leaf is a data point. Every internal node
+represents a merge, drawn at the y-coordinate equal to the
+distance at which that merge happened. The longer the vertical
+line above a node, the more &ldquo;expensive&rdquo; the next merge — i.e.
+the more <em>separated</em> the two children were before being joined.</p>
+<pre><code>distance
+   |
+6  |               ┌──────────────────────────┐
+   |               │                          │
+4  |    ┌──────────┴──────┐         ┌─────────┴──────┐
+   |    │                 │         │                │
+2  |  ┌─┴─┐           ┌───┴───┐   ┌─┴─┐         ┌────┴───┐
+   |  │   │           │       │   │   │         │        │
+0  |  A   B           C       D   E   F         G        H
+</code></pre>
+<p>Two ways to read it.</p>
+<p><strong>Choose K visually.</strong> Cut the dendrogram with a horizontal
+line at any height; the number of vertical lines it crosses is
+the number of clusters at that height. A cut at <code>y = 3</code> in the
+sketch above gives 4 clusters: <code>{A,B}</code>, <code>{C,D}</code>, <code>{E,F}</code>,
+<code>{G,H}</code>. A cut at <code>y = 5</code> gives 2 clusters: <code>{A,B,C,D}</code> and
+<code>{E,F,G,H}</code>.</p>
+<p><strong>Choose K from the gaps.</strong> The &ldquo;right&rdquo; <code>K</code> is often the one
+just <em>below</em> a big vertical gap in the dendrogram. A long
+unbroken vertical line means the next merge cost a lot — the
+two clusters being merged were genuinely separated. Cut just
+below that gap and the algorithm tells you: <em>these were the
+real clusters; merging across this gap is artificial</em>.</p>
+<p>This is the conceptual win over K-Means. K-Means picks one
+clustering; hierarchical clustering produces <em>all</em> clusterings
+simultaneously, lets you visualise the structure, and lets you
+pick the level that matches your problem.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script reuses the 3-cluster Gaussian-blob
+dataset from Part 1 (600 points, three well-separated blobs in
+2D), fits agglomerative clustering with Ward linkage, and
+extracts clusterings at multiple cut heights.</p>
+<pre><code>DEMO 1 --- Hierarchical clustering from scratch
+  Data shape  : 600 points, 2 features
+  Linkage     : Ward
+  Lance-Williams updates, fit once, cut at any K
+
+  Cut at K =  2 clusters: ARI vs ground truth = 0.571
+  Cut at K =  3 clusters: ARI vs ground truth = 1.000
+  Cut at K =  4 clusters: ARI vs ground truth = 0.869
+  Cut at K =  6 clusters: ARI vs ground truth = 0.577
+</code></pre>
+<pre><code>DEMO 2 --- Same data, scikit-learn AgglomerativeClustering
+  Linkage     : Ward, K = 3
+  ARI vs ground truth : 1.000
+  Agreement (ARI) with from-scratch clustering : 1.000
+</code></pre>
+<pre><code>DEMO 3 --- Linkage criterion comparison (K = 3, ARI vs ground truth)
+  single    1.000
+  complete  0.995
+  average   1.000
+  ward      1.000
+
+  --- on harder data (two interleaving moons, n = 300) ---
+  single    1.000
+  complete  0.597
+  average   0.416
+  ward      0.416
+</code></pre>
+<p>Three things to pull out.</p>
+<p><strong>At <code>K = 3</code>, the Ward clustering is perfect.</strong> ARI 1.000
+against ground truth — the agglomerative algorithm recovered
+the same three blobs K-Means did in Part 1, without ever being
+told that <code>K</code> was 3.</p>
+<p><strong>Cutting at the wrong K reveals structure rather than failure.</strong>
+Cut at <code>K = 2</code> and the ARI drops to 0.57 — not because the
+algorithm got it wrong, but because two true clusters got
+merged together (they had to; you asked for fewer clusters than
+exist). Cut at <code>K = 4</code> and ARI drops to 0.87 — one true cluster
+got over-split into two sub-clusters. The dendrogram shows
+<em>all</em> of these clusterings simultaneously and lets you see why
+none of them except <code>K = 3</code> is natural.</p>
+<p><strong>Linkage choice matters most when data is non-convex.</strong> On the
+clean blobs every linkage recovers an essentially perfect
+clustering (single, average, and Ward at 1.000; complete at
+0.995). On the two interleaving half-moons (which K-Means
+famously butchers), only <strong>single</strong> linkage gets ARI 1.000 —
+its chaining behaviour follows each moon all the way around.
+Ward and average collapse to ARI ≈ 0.42, complete to 0.60 —
+they all prefer compact clusters, and the moons are anything
+but. This is the rare case where chaining is exactly what you
+want.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>The headline numbers are stark:</p>
+<p><strong>Memory is <code>O(n²)</code>.</strong> The pairwise distance matrix has <code>n(n−1)/2</code>
+entries. At <code>n = 10⁴</code> that is 50 million pairs — about
+400 MB of doubles. At <code>n = 10⁵</code> it is 40 GB. There is no way
+around this for a true hierarchical clustering — you need <em>all</em>
+the pairs because any pair could be involved in a merge.</p>
+<p><strong>Time is <code>O(n² log n)</code></strong> in the standard implementations
+(SLINK for single, CLINK for complete, NN-chain for Ward;
+sklearn uses these under the hood). The naive implementation
+scans the full distance matrix at every merge, giving <code>O(n³)</code>
+— what the from-scratch script does — fine up to <code>n ≈ 10³</code>,
+slow above that.</p>
+<p><strong>Prediction is awkward.</strong> Hierarchical clustering is
+non-parametric — it assigns clusters to the training set
+directly, with no model that generalises to new points.
+Predicting the cluster of a new query point usually means
+&ldquo;compute its distance to existing cluster centroids and assign
+to the nearest&rdquo;, which is K-Means-style prediction grafted on
+top, not the algorithm&rsquo;s natural output.</p>
+<p>For datasets above ~10⁴ points the practical answer is one of:
+<strong>HDBSCAN</strong> (a fast hierarchical-density variant we will meet
+in track 04), <strong>BIRCH</strong> (which compresses the data into a
+clustering feature tree first), or just K-Means with multiple
+restarts.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>Hierarchical clustering&rsquo;s footprint is largest in fields where
+the <em>hierarchy itself</em> matters scientifically:</p>
+<p><strong>Phylogenetics and genomics.</strong> UPGMA (Unweighted Pair Group
+Method with Arithmetic Mean) — average linkage on genetic
+distances — built the original molecular phylogenies in the
+1970s. Modern phylogenetic trees use more sophisticated
+likelihood-based methods (RAxML, BEAST), but agglomerative
+clustering on distance matrices remains a standard quick first
+pass.</p>
+<p><strong>Single-cell RNA-seq.</strong> Identifying cell types in
+single-cell data routinely uses hierarchical clustering on
+dimensionally-reduced gene-expression vectors, often with
+Ward linkage. Tools like Seurat ship with several
+agglomerative-clustering options as standard analysis paths.</p>
+<p><strong>Document and topic taxonomies.</strong> Hierarchical clustering of
+TF-IDF or sentence-embedding vectors is the standard way to
+build a tree of topics for navigation, faceted search, and
+content recommendation. The hierarchy is often the <em>deliverable</em>
+— &ldquo;here is your topic taxonomy&rdquo; — not just an intermediate
+artefact.</p>
+<p><strong>Customer segmentation hierarchies.</strong> Where K-Means gives you
+4 segments, hierarchical clustering gives you the full nested
+structure: 2 broad segments → 4 sub-segments → 8 fine segments,
+all consistent with each other. Useful when different parts of
+the business want different segmentation granularities from
+the same data.</p>
+<p><strong>Image segmentation.</strong> Hierarchical region merging is a
+classical computer-vision technique for segmenting images into
+nested regions of similar pixels. Modern deep-learning
+segmentation (Mask R-CNN, SAM) has displaced it for object
+boundaries, but hierarchical region-merging is still used in
+medical imaging where interpretability matters.</p>
+<p><strong>Anomaly detection.</strong> A point that joins the dendrogram only
+at very high distance (a merge near the top of the tree) is, by
+construction, far from every other cluster. The dendrogram
+gives you a free anomaly score: how high you had to go before
+the point was absorbed.</p>
+<p>The pattern: hierarchical clustering is rarely the <em>fastest</em>
+unsupervised algorithm or the most-deployed in
+high-throughput ML systems, but it is consistently the
+algorithm of choice when scientists want to <em>see</em> the cluster
+structure, not just consume it.</p>
+<hr />
+<h2>When NOT to use hierarchical clustering</h2>
+<p>Walk away when:</p>
+<p><strong>Your dataset has more than ~10⁴ points.</strong> The <code>O(n²)</code> memory
+makes pairwise hierarchical clustering impractical above that.
+Use HDBSCAN, BIRCH, or fall back to K-Means with multiple
+restarts.</p>
+<p><strong>You need streaming / online clustering.</strong> Hierarchical
+clustering is fundamentally batch — it needs to see all the
+data to compute the full distance matrix. Streaming variants
+exist (CURE, BIRCH) but lose much of the elegance.</p>
+<p><strong>You need probabilistic cluster assignments.</strong> Agglomerative
+clustering produces hard assignments. For &ldquo;this point is 70%
+cluster A, 30% cluster B&rdquo; use a Gaussian Mixture Model.</p>
+<p><strong>Density matters more than distance.</strong> If your &ldquo;clusters&rdquo; are
+defined by being dense regions of feature space (the way DBSCAN
+thinks about it), hierarchical clustering with metric distances
+will get the boundaries wrong. Use DBSCAN or HDBSCAN instead.</p>
+<p><strong>You need to predict cluster membership for new data.</strong> No
+natural prediction step. K-Means or Gaussian Mixtures do this
+out of the box.</p>
+<p><strong>You don&rsquo;t trust your distance metric.</strong> Hierarchical
+clustering is <em>highly</em> sensitive to the distance/linkage
+combination. Mis-specified distances can produce dendrograms
+that look reasonable but reflect noise rather than structure.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 3 of the Unsupervised Learning track is <strong>Principal
+Component Analysis (PCA)</strong> — the foundational dimensionality
+reduction technique. Where K-Means and hierarchical clustering
+look for <em>groups</em> in the data, PCA looks for <em>directions</em>: the
+axes along which the data varies most. The two questions are
+complementary, and PCA is often the preprocessing step that
+makes clustering work in high-dimensional spaces (where
+distance metrics break down for the reasons K-Means struggled
+with).</p>
+<p>After PCA the track turns to t-SNE and UMAP — non-linear
+dimensionality reduction designed specifically for
+visualisation — then DBSCAN, Gaussian Mixture Models, and the
+rest of the unsupervised toolkit.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/03-unsupervised-learning/02-hierarchical-clustering/hierarchical_clustering.py"><strong>hierarchical_clustering.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scikit-learn
+python hierarchical_clustering.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scikit-learn</code>. The script implements
+agglomerative hierarchical clustering from scratch with all
+four standard linkages (single, complete, average, Ward),
+fits the same 3-blob dataset from Part 1 to recover the
+clustering at multiple cut heights, compares against
+scikit-learn&rsquo;s <code>AgglomerativeClustering</code>, and demonstrates
+on the two-moons dataset the one case where single linkage&rsquo;s
+chaining behaviour beats the others. The headline insight
+worth pinning to the wall: <strong>agglomerative clustering builds a
+dendrogram of every possible clustering at once, the linkage
+criterion controls what shape the resulting clusters take, and
+the algorithm lets you choose <code>K</code> after looking at the data
+rather than before</strong>.</p>
+<hr />
+<p><em>This is Part 2 of the Unsupervised Learning track in the Algorithms in Python series. The companion script <code>hierarchical_clustering.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/52dbacba3b5a">Part 1</a> covered K-Means Clustering. Part 3 will look at Principal Component Analysis — the foundational dimensionality reduction technique and a frequent preprocessing step for clustering algorithms in high-dimensional spaces.</em></p>
