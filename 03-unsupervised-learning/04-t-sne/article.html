@@ -1,0 +1,349 @@
+<p>In Part 3 we reduced the dimensionality of the digits dataset
+with PCA. The first two principal components captured 28% of
+the variance and gave us a 2D scatterplot in which the digit
+classes were <em>starting</em> to be visible — but several digits
+overlapped heavily, the boundaries were fuzzy, and the global
+geometry of the 64-dimensional pixel space had to be approximated
+by two straight axes. PCA is <em>linear</em>: it can only find
+directions that are linear combinations of the original
+features. When the structure in your data lives on a curved
+<em>manifold</em> — handwritten digits being one of the canonical
+examples — a linear projection can only do so much.</p>
+<p><strong>t-SNE</strong> (t-distributed Stochastic Neighbour Embedding;
+van der Maaten &amp; Hinton, 2008) is the algorithm that took
+over scientific poster sessions and machine-learning blog posts
+in the 2010s by going non-linear. It throws away the idea of
+preserving variance or global geometry and instead asks one
+question: in the high-dimensional space, <em>which points are each
+other&rsquo;s neighbours?</em> — then arranges the low-dimensional
+embedding so that the neighbour relationships are preserved as
+faithfully as possible. The result is a 2D or 3D scatter where
+visually distinct clusters appear <em>because</em> the algorithm has
+worked hard to keep neighbours together and distant points
+apart, ignoring exactly how far apart they actually were.</p>
+<p>t-SNE is the reason MNIST digit clusters look beautifully
+separable in every tutorial. It is the workhorse visualisation
+for word embeddings, sentence embeddings, image embeddings,
+and — overwhelmingly — for single-cell RNA-seq, where almost
+every paper since 2014 has used t-SNE or its successor UMAP
+to display cell types in 2D. It is also one of the most
+<em>misunderstood</em> algorithms in machine learning, because its
+output looks like a clustering result but does not have the
+mathematical properties of one. We will spend a section on
+exactly what t-SNE preserves and what it does not.</p>
+<p>This article builds t-SNE from first principles. We will derive
+the high-dimensional and low-dimensional similarity
+distributions, explain why the low-dimensional one uses a
+Student t-distribution rather than a Gaussian, write a
+minimal from-scratch implementation in numpy, compare with
+scikit-learn&rsquo;s <code>TSNE</code> and with PCA on the same digits dataset,
+and finish with the long list of <em>what t-SNE is not</em> — most
+importantly, not a feature extractor.</p>
+<hr />
+<h2>The intuition: preserve who-is-near-whom</h2>
+<p>Imagine a 64-dimensional point cloud — handwritten-digit images
+flattened into pixel vectors. Two images of the digit &ldquo;3&rdquo;
+written by different people are <em>close</em> in this space; an image
+of &ldquo;3&rdquo; and an image of &ldquo;8&rdquo; are <em>farther apart</em>. Distance in the
+original space is the signal we want to capture.</p>
+<p>PCA preserves variance by rotating and projecting. The cost is
+that any two points that were close in 64-D can end up far
+apart in 2-D if the direction connecting them is perpendicular
+to the top two principal components. Local neighbourhoods get
+shredded.</p>
+<p>t-SNE inverts the priorities. The high-dimensional distances
+between <em>nearby</em> points are preserved at all costs; the
+distances between distant points are sacrificed. The 2-D
+embedding is constructed by simulating a system where every
+point <em>attracts</em> its high-dimensional neighbours and <em>repels</em>
+the rest, until the system settles into a stable arrangement.</p>
+<p>Mathematically: define a probability distribution <code>P</code> over
+<em>pairs</em> of high-dimensional points where <code>P_{ij}</code> is high if
+<code>x_i</code> and <code>x_j</code> are close. Define a similar distribution <code>Q</code>
+over pairs of <em>low-dimensional</em> points <code>y_i, y_j</code>. Optimise the
+low-dimensional points so that <code>Q</code> matches <code>P</code> as closely as
+possible. &ldquo;As closely as possible&rdquo; means: minimise the
+Kullback–Leibler divergence <code>KL(P || Q)</code>.</p>
+<hr />
+<h2>The maths</h2>
+<p>The high-dimensional similarity between points <code>i</code> and <code>j</code>:</p>
+<pre><code>p_{j|i} = exp(-‖x_i - x_j‖² / 2σ_i²) /
+          Σ_{k ≠ i} exp(-‖x_i - x_k‖² / 2σ_i²)
+</code></pre>
+<p>This is a Gaussian centred on <code>x_i</code>, scaled by a bandwidth
+<code>σ_i</code> chosen so the <em>effective number of neighbours</em> (the
+<strong>perplexity</strong>) is a target value — typically 5 to 50.
+Perplexity is the most important knob in t-SNE; we will come
+back to it.</p>
+<p>Symmetrise across <code>i</code> and <code>j</code>:</p>
+<pre><code>p_{ij} = (p_{j|i} + p_{i|j}) / (2n)
+</code></pre>
+<p>So <code>P</code> is a joint distribution over pairs, with <code>Σ p_{ij} = 1</code>.</p>
+<p>The low-dimensional similarity uses a <strong>Student t-distribution
+with one degree of freedom</strong> (equivalent to a Cauchy
+distribution):</p>
+<pre><code>q_{ij} = (1 + ‖y_i - y_j‖²)⁻¹ /
+         Σ_{k ≠ l} (1 + ‖y_k - y_l‖²)⁻¹
+</code></pre>
+<p>The objective is the KL divergence:</p>
+<pre><code>C = Σ_{i, j} p_{ij} log(p_{ij} / q_{ij})
+</code></pre>
+<p>The low-dimensional <code>y_i</code> are initialised randomly and updated
+by gradient descent. The gradient with respect to <code>y_i</code> has a
+clean form:</p>
+<pre><code>∂C/∂y_i = 4 Σ_j (p_{ij} - q_{ij}) (y_i - y_j) (1 + ‖y_i - y_j‖²)⁻¹
+</code></pre>
+<p>Iterate until convergence (typically ~1000 iterations with
+momentum and a few standard heuristics like &ldquo;early exaggeration&rdquo;
+that multiply the high-d probabilities by 4× for the first 250
+iterations to encourage tight cluster formation).</p>
+<hr />
+<h2>Why the t-distribution?</h2>
+<p>t-SNE&rsquo;s predecessor SNE (Hinton &amp; Roweis, 2003) used Gaussians
+in both spaces. The result suffered from the <strong>crowding
+problem</strong>: in a faithful low-dimensional embedding of
+high-dimensional data, there simply isn&rsquo;t enough room to
+accurately represent the distances <em>between</em> clusters of points
+— moderate-distance pairs all collapse to roughly the same
+distance, and clusters merge visually.</p>
+<p>The Student t-distribution with one degree of freedom has heavy
+tails. A pair of points at moderate low-dimensional distance
+gets a much smaller <code>q_{ij}</code> than they would under a Gaussian
+— which means the gradient pushes them <em>farther apart</em> than
+SNE would. This deliberate over-spreading of moderate-distance
+pairs is what gives t-SNE its characteristic well-separated
+clusters. The &ldquo;t&rdquo; in t-SNE is doing the work that makes the
+visualisation legible.</p>
+<hr />
+<h2>Perplexity, the knob that matters</h2>
+<p>The bandwidth <code>σ_i</code> is set per-point such that the conditional
+distribution <code>p_{j|i}</code> has a specified <em>perplexity</em>. Perplexity
+is <code>2^H</code> where <code>H</code> is the entropy of <code>p_{j|i}</code>; it can be
+interpreted as the <em>effective number of neighbours</em> each point
+&ldquo;feels&rdquo;. Typical values:</p>
+<ul>
+<li><strong>Perplexity 5</strong> — very local; the embedding focuses on
+  immediate neighbours and may shatter weakly-connected
+  clusters into fragments.</li>
+<li><strong>Perplexity 30</strong> — the default in most implementations;
+  balances local and mid-range structure.</li>
+<li><strong>Perplexity 50</strong> — broader; preserves more of the
+  intermediate-scale geometry.</li>
+<li><strong>Perplexity &gt; n/3</strong> — meaningless; the algorithm tries to
+  treat almost every point as a neighbour and the visualisation
+  flattens into noise.</li>
+</ul>
+<p>The choice of perplexity changes the visualisation. <strong>Different
+perplexities reveal different aspects of the data.</strong> Best
+practice is to run t-SNE at three or four perplexity values
+(say 5, 30, 50) and look at all of them; treating any single
+t-SNE plot as ground truth is a recipe for over-confident
+storytelling.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script uses the same <code>digits</code> dataset from
+Part 3 — 1,797 grey-scale 8×8 images of handwritten 0–9 — and
+runs four reductions side-by-side: from-scratch t-SNE (slow,
+educational), scikit-learn&rsquo;s t-SNE (Barnes–Hut, fast), and PCA
+for comparison.</p>
+<pre><code>DEMO 1 --- t-SNE from scratch on the digits dataset
+  Subsample for speed : 300 points
+  Perplexity          : 30
+  Iterations          : 600
+  Final KL divergence : 0.411
+  KNN accuracy in 2D  : 0.910  (15-NN classifier on the embedding)
+</code></pre>
+<pre><code>DEMO 2 --- Same data (full 1797), scikit-learn TSNE (Barnes-Hut)
+  Perplexity          : 30
+  Iterations          : 1000
+  Final KL divergence : 0.755
+  KNN accuracy in 2D  : 0.971
+</code></pre>
+<pre><code>DEMO 3 --- Same data, PCA (2 components, from Part 3)
+  Cumulative variance explained : 0.285
+  KNN accuracy in 2D            : 0.624
+</code></pre>
+<p>The KNN-in-2D score is a standard way to <em>quantify</em> how good a
+visualisation is at preserving class structure: project to 2D,
+classify each point by majority vote of its 15 nearest 2D
+neighbours, measure accuracy against true labels. It is not how
+the embeddings were trained — t-SNE and PCA are both
+unsupervised — but it tells you whether the structure they
+discovered lines up with the structure that actually matters.</p>
+<p>The results are striking: PCA&rsquo;s 2D projection lets a 15-NN
+classifier get 62% of digits right (well above chance — <code>1/10
+= 10%</code> — but not great). t-SNE&rsquo;s embedding pushes that to
+<strong>97%</strong>. The non-linear visualisation has organised the same
+64-D point cloud so that almost every digit ends up surrounded
+by other copies of the same digit. PCA cannot do this; the
+manifold is too curved to be captured by a linear projection.</p>
+<hr />
+<h2>What t-SNE preserves and does not</h2>
+<p>This is the section that makes t-SNE <em>useful instead of
+misleading</em>. The algorithm is widely misused. The honest list:</p>
+<p><strong>Preserved.</strong> Local neighbourhoods. If two points were among
+each other&rsquo;s top-<code>k</code> nearest neighbours in the original space
+(for <code>k</code> related to perplexity), they will usually be close
+in the embedding too.</p>
+<p><strong>Not preserved.</strong> Distances between clusters. The visual
+distance between two clusters in a t-SNE plot does <em>not</em>
+correspond to their distance in the original space — t-SNE
+deliberately spreads moderate-distance pairs apart. A cluster
+on one side of the plot and a cluster on the other could be
+geometric neighbours in the original space, or could be very
+far apart. The plot does not tell you.</p>
+<p><strong>Not preserved.</strong> Cluster <em>sizes</em>. A big visual blob in a
+t-SNE plot is not necessarily a big cluster in feature space;
+t-SNE expands sparse clusters to fill available space. Two
+visually similar-sized clusters in the embedding may have
+wildly different point counts in reality.</p>
+<p><strong>Not preserved.</strong> Densities. The local point density in the
+embedding does not reflect the density in the original space.
+t-SNE tries to keep each point&rsquo;s neighbourhood the same <em>size</em>
+in the low-dimensional plot, regardless of how dense or sparse
+the local region was originally.</p>
+<p><strong>Not preserved.</strong> Global geometry. Don&rsquo;t read continuity,
+&ldquo;this cluster is between those two&rdquo;, or &ldquo;this region is empty&rdquo;
+from a t-SNE plot. These conclusions are not licensed by the
+algorithm.</p>
+<p><strong>Not preserved across runs.</strong> Different random initialisations
+produce different layouts. The cluster <em>memberships</em> are
+typically stable, but the relative <em>positions</em> of clusters
+change. Always run t-SNE multiple times before reading
+structure from the layout.</p>
+<p>The honest summary: <strong>t-SNE is a tool for seeing clusters that
+exist in the data, not for measuring distances or detecting
+spatial relationships</strong>. Treat it like a microscope, not like a
+map.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>The cost of t-SNE depends on the implementation:</p>
+<p><strong>Naive t-SNE</strong> (the original 2008 algorithm) is <code>O(n²)</code> per
+iteration because computing <code>q_{ij}</code> requires summing over all
+pairs. With ~1000 iterations and <code>n = 5000</code> this becomes
+genuinely slow.</p>
+<p><strong>Barnes–Hut t-SNE</strong> (van der Maaten, 2014) — sklearn&rsquo;s
+default — approximates the repulsive forces using a quad-tree
+over the low-dimensional points and brings per-iteration cost
+to <code>O(n log n)</code>. Practical up to <code>n ≈ 10⁵</code>.</p>
+<p><strong>FIt-SNE</strong> (Linderman et al, 2019) — uses the Fast Fourier
+Transform to evaluate the repulsive forces on a regular grid.
+Sub-linear scaling in <code>n</code> past <code>n ≈ 10⁴</code>; the only practical
+choice for <code>n &gt; 10⁵</code>.</p>
+<p>Memory in all variants is <code>O(n²)</code> for the <code>P</code> matrix (or
+<code>O(n · k)</code> if you restrict each row to its <code>k</code> nearest
+neighbours — which is the standard optimisation in fast
+implementations).</p>
+<p>For datasets above <code>n ≈ 10⁵</code>, <strong>UMAP</strong> (the subject of Part 5
+in this track) typically wins on both speed and quality. For
+<code>n &lt; 10⁵</code>, t-SNE remains the de facto standard for
+visualisation in most published research.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>t-SNE became famous in the deep-learning era as the
+visualisation tool for <em>learned representations</em>:</p>
+<p><strong>Word embeddings.</strong> Mikolov&rsquo;s 2013 Word2Vec paper was popularised
+in part by stunning t-SNE plots of 100-dimensional word vectors
+arranged in 2D so that semantically related words (countries,
+colours, professions) clustered together. The same recipe is
+applied to sentence embeddings (Sentence-BERT), document
+embeddings (Doc2Vec), and modern LLM embedding spaces.</p>
+<p><strong>Image embeddings.</strong> ConvNet features (Krizhevsky&rsquo;s AlexNet
+2012, every subsequent ResNet / EfficientNet / ViT) are
+routinely visualised by passing a dataset through the network,
+collecting the penultimate-layer activations, and running t-SNE.
+The resulting plots show how the network organised the input
+space — frequently used as evidence that a model has &ldquo;learned
+meaningful representations&rdquo;.</p>
+<p><strong>Single-cell RNA-seq.</strong> The dominant application of t-SNE in
+science. Cell-by-gene expression matrices, after normalisation
+and PCA, are visualised with t-SNE (or UMAP) to identify cell
+types. Almost every single-cell paper published since 2015
+includes such a plot.</p>
+<p><strong>TensorBoard&rsquo;s embedding projector.</strong> Google&rsquo;s TensorBoard
+visualisation tool ships with built-in t-SNE for exploring any
+embedding space — a feature widely used for debugging
+production ML systems.</p>
+<p><strong>Anomaly inspection.</strong> Run t-SNE on a dataset and look for
+points that end up isolated from any cluster. Useful as a
+qualitative anomaly-detection tool, especially when paired
+with domain expertise.</p>
+<p><strong>Quality assurance for deep representations.</strong> During model
+development, t-SNE on the model&rsquo;s activations is the canonical
+&ldquo;does the model know what it&rsquo;s doing?&rdquo; check. If similar inputs
+cluster together, the representation is probably good;
+otherwise the representation is probably broken.</p>
+<p>The pattern: t-SNE is almost always used as a <em>diagnostic</em>
+or <em>presentation</em> tool rather than as a step inside a
+production ML pipeline. It is the chart, not the model.</p>
+<hr />
+<h2>When NOT to use t-SNE</h2>
+<p>t-SNE&rsquo;s weaknesses are the flip side of its strengths:</p>
+<p><strong>As a feature extractor.</strong> t-SNE embeddings are not
+generalisable — there is no fitted model, just an arrangement
+of points. New points cannot be embedded into an existing
+t-SNE plot without re-running the algorithm. (Parametric t-SNE
+exists but is rarely used.) Use PCA, autoencoders, or
+self-supervised embeddings if you need transferable features.</p>
+<p><strong>For clustering decisions.</strong> A t-SNE plot is a visualisation,
+not a clustering. Running K-Means on t-SNE coordinates &ldquo;to find
+clusters&rdquo; is a common anti-pattern — the resulting clusters
+reflect t-SNE&rsquo;s layout heuristics as much as the data. If you
+need clusters, use HDBSCAN, K-Means, or hierarchical
+clustering directly on the original (or PCA-reduced) data.</p>
+<p><strong>For datasets beyond ~10⁵ points.</strong> Barnes–Hut and FIt-SNE
+help, but even FIt-SNE struggles past n = 10⁶. Use <strong>UMAP</strong>
+instead (see Part 5).</p>
+<p><strong>When you need to compare distances between clusters.</strong> The
+inter-cluster distances in a t-SNE plot are meaningless. If
+those distances matter, do PCA or multidimensional scaling.</p>
+<p><strong>When determinism matters.</strong> Different random seeds produce
+different layouts. For papers and dashboards where the figure
+must be stable across re-runs, this is awkward. Pin the seed
+and accept that the visualisation is one of many valid
+arrangements.</p>
+<p><strong>For data that is genuinely linear.</strong> If PCA already
+separates the classes well, t-SNE is over-engineering. Use the
+simpler tool.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 5 of the Unsupervised Learning track is <strong>UMAP</strong>
+(Uniform Manifold Approximation and Projection; McInnes,
+Healy &amp; Melville, 2018). UMAP solves most of t-SNE&rsquo;s
+limitations: it is faster (often 10× to 100×), it scales to
+millions of points, it preserves <em>both</em> local and global
+structure better, and unlike t-SNE it produces a re-usable
+transformation — new points can be embedded without re-fitting.
+For visualisation of large datasets in 2026, UMAP is the
+default; t-SNE remains the safer choice on smaller datasets
+and in scientific publishing where its longer track record
+matters.</p>
+<p>After UMAP the track turns to NMF (Non-negative Matrix
+Factorisation) for parts-based decomposition, then Spectral
+Clustering and Association Rule Mining.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/03-unsupervised-learning/04-t-sne/tsne.py"><strong>tsne.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scikit-learn
+python tsne.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scikit-learn</code>. The script implements a
+minimal from-scratch t-SNE — Gaussian high-dimensional
+similarities, t-distributed low-dimensional similarities,
+gradient descent on KL divergence — on a 300-point subsample
+of the digits dataset (the full naive <code>O(n²)</code> implementation
+would take minutes on the full 1797). It then runs
+scikit-learn&rsquo;s Barnes–Hut t-SNE on the full dataset and PCA
+for comparison, reporting a <code>KNN-in-2D</code> accuracy that
+quantifies how cleanly each method preserves digit-class
+neighbourhoods. The headline insight worth pinning to the
+wall: <strong>t-SNE is a non-linear visualisation that preserves
+local neighbourhoods at the cost of global geometry; it makes
+manifold structure visible and is the right tool for
+<em>looking</em> at high-dimensional data, but not for measuring,
+clustering, or feature-engineering from the result</strong>.</p>
+<hr />
+<p><em>This is Part 4 of the Unsupervised Learning track in the Algorithms in Python series. The companion script <code>tsne.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/20ea2e6745d4">Part 3</a> covered Principal Component Analysis. Part 5 will look at UMAP — t-SNE&rsquo;s faster, scalable, and better-behaved successor.</em></p>

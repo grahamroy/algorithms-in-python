@@ -50,7 +50,7 @@ clear explanations and Python implementations.
 | 1 | K-Means Clustering | ✅ |
 | 2 | Hierarchical Clustering | ✅ |
 | 3 | Principal Component Analysis (PCA) | ✅ |
-| 4 | t-SNE | ⬜ |
+| 4 | t-SNE | ✅ |
 | 5 | UMAP | ⬜ |
 | 6 | Non-negative Matrix Factorisation (NMF) | ⬜ |
 | 7 | Spectral Clustering | ⬜ |
