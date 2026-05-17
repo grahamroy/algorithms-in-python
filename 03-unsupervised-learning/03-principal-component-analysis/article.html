@@ -1,0 +1,355 @@
+<p>In Parts 1 and 2 we asked clustering algorithms to find
+<strong>groups</strong> in the data — points that look similar to each
+other and different from the rest. Today we ask a different
+question. Forget the groups. Look at the <em>whole point cloud</em>
+and tell me: which directions in feature space carry the most
+information?</p>
+<p>That is the question <strong>Principal Component Analysis</strong> (PCA)
+answers. Pearson posed it in 1901; Hotelling re-derived and
+popularised it in 1933. The answer is geometrically simple
+— rotate the coordinate system so the new axes line up with
+the directions of greatest variance, in decreasing order — and
+operationally devastating: most real datasets put 80% or 90% of
+their variance into a small number of directions, so a few
+&ldquo;principal components&rdquo; can replace dozens of original features
+with almost no information loss.</p>
+<p>PCA is the foundational dimensionality-reduction technique. It
+underlies every face-recognition system from the 1990s
+(&ldquo;eigenfaces&rdquo;), every &ldquo;compress your high-dimensional features
+before clustering&rdquo; preprocessing step, every visualisation of a
+high-dimensional dataset projected onto two axes for a
+scatterplot, the whitening step that helps neural networks
+train, and the LSA / LSI text-retrieval methods that pre-dated
+modern embeddings. It is older than scikit-learn and older than
+machine learning as a discipline, and it is still the right
+first thing to try when your dataset has too many features.</p>
+<p>This article builds PCA from first principles. We will
+motivate it as variance maximisation, derive the algorithm via
+the Singular Value Decomposition (SVD) of the centred data
+matrix, implement it from scratch in numpy, fit it to
+scikit-learn&rsquo;s handwritten-digits dataset to compress 64 pixel
+features into 2 principal components good enough to <em>see</em>
+digit clusters, compare with scikit-learn&rsquo;s <code>PCA</code>, and finish
+with what PCA assumes about your data and where to reach for
+something else (t-SNE, UMAP, autoencoders, ICA) when those
+assumptions break.</p>
+<hr />
+<h2>The intuition: maximum-variance directions</h2>
+<p>Suppose you have data with two highly correlated features —
+say, height and weight of adults. Plot points on the
+height-vs-weight plane and they will form a long elongated
+cloud running diagonally from short-and-light to tall-and-heavy.
+Most of the variation in the cloud is along that diagonal; very
+little is perpendicular to it.</p>
+<p>Standard <code>(x, y)</code> coordinates are a poor description of this
+data. A <em>better</em> coordinate system would have one axis aligned
+with the diagonal (the direction of most variance) and a second
+axis perpendicular to it (the direction of least variance). In
+those coordinates, almost all the information about each point
+sits in the first axis; the second is nearly zero. We have
+<em>reduced</em> a two-dimensional cloud to a one-dimensional summary
+without losing meaningful structure.</p>
+<p>PCA generalises this picture to any number of dimensions. Find
+the direction of maximum variance — call it <code>PC1</code>. Then find
+the direction of maximum variance <em>among directions orthogonal
+to <code>PC1</code></em> — that is <code>PC2</code>. Continue until you have <code>d</code>
+principal components in <code>d</code>-dimensional data, each one
+orthogonal to all the previous, each one carrying less variance
+than the one before. The components are a <em>new orthonormal
+basis</em> for the data, ordered by how much information they
+carry.</p>
+<p>The compression win comes from the fact that, on real data, the
+later principal components usually carry very little variance.
+Drop them, keep only the first few, and you have replaced a
+high-dimensional dataset with a low-dimensional one that
+preserves the structure you cared about.</p>
+<hr />
+<h2>The math: SVD of the centred data matrix</h2>
+<p>The clean way to derive PCA is via the <strong>Singular Value
+Decomposition</strong> of the centred data matrix.</p>
+<p>Centre your data so each feature has mean zero — subtract the
+column means:</p>
+<pre><code>X_c = X - mean(X, axis=0)
+</code></pre>
+<p>Now compute the SVD:</p>
+<pre><code>X_c = U · Σ · Vᵀ
+</code></pre>
+<p>where <code>U</code> is <code>n × n</code> orthonormal, <code>V</code> is <code>d × d</code> orthonormal, and
+<code>Σ</code> is <code>n × d</code> with the <strong>singular values</strong> <code>σ_1 ≥ σ_2 ≥ ... ≥ 0</code>
+on its diagonal and zeros elsewhere.</p>
+<p>The principal components are the columns of <code>V</code>. The variance
+explained by the <em>i</em>-th principal component is
+<code>σ_i² / (n − 1)</code>. The &ldquo;score&rdquo; of each data point on that
+component — its coordinate in the new basis — is the
+corresponding column of <code>U · Σ</code>, equivalently <code>X_c · V[:, i]</code>.</p>
+<p>The connection to the covariance picture: the sample
+covariance matrix is <code>C = X_cᵀ · X_c / (n − 1)</code>. Substituting
+<code>X_c = U Σ Vᵀ</code> gives <code>C = V · (Σ² / (n − 1)) · Vᵀ</code>, which is
+the eigendecomposition of <code>C</code> — eigenvectors <code>V</code>, eigenvalues
+<code>σ_i² / (n − 1)</code>. SVD-of-data and
+eigen-decomposition-of-covariance are the same calculation; SVD is numerically more
+stable and avoids ever forming the <code>d × d</code> covariance matrix
+explicitly, which matters when <code>d</code> is large.</p>
+<hr />
+<h2>The algorithm</h2>
+<p>Putting it together:</p>
+<pre><code>fit(X, n_components):
+    # 1. Centre the data
+    mean_ = X.mean(axis=0)
+    X_c = X - mean_
+
+    # 2. Singular Value Decomposition
+    U, S, Vt = svd(X_c, full_matrices=False)
+
+    # 3. Components are rows of Vt; explained variance from S
+    components_ = Vt[:n_components]
+    explained_variance_ = S**2 / (n - 1)
+    explained_variance_ratio_ = explained_variance_ / explained_variance_.sum()
+
+    # 4. Resolve sign ambiguity (SVD is unique only up to sign)
+    sign_correct(components_)
+    return mean_, components_, explained_variance_ratio_
+
+transform(X):
+    return (X - mean_) @ components_.T
+
+inverse_transform(X_proj):
+    return X_proj @ components_ + mean_
+</code></pre>
+<p>A few subtleties worth pulling out.</p>
+<p>The <strong>centring</strong> step is mandatory. PCA without centring measures
+&ldquo;distance from origin&rdquo; rather than &ldquo;variance around the mean&rdquo;,
+which is rarely what you want. Most implementations centre by
+default; if you do PCA from scratch you must remember to
+subtract the mean.</p>
+<p>The <strong>inverse transform</strong> is what makes PCA a <em>compression</em>: a
+point projected to <code>k</code> components, then transformed back, is
+the closest possible reconstruction in the original space using
+only <code>k</code> directions. The reconstruction error per point is
+exactly the variance carried by the dropped components.</p>
+<p>The <strong>standardisation</strong> question is more subtle. PCA is sensitive
+to feature scale: a feature in metres will have larger variance
+than the same feature in millimetres just because of units. If
+your features are on different scales, standardise first
+(<code>StandardScaler</code> in sklearn) so each contributes equally to
+the variance budget. If your features are already in the same
+units (pixel intensities, gene-expression z-scores), centring
+without scaling is usually right.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script loads scikit-learn&rsquo;s <code>digits</code> dataset —
+1,797 grey-scale 8×8 images of handwritten digits 0–9, flattened
+into 64-dimensional feature vectors. The task: reduce 64
+dimensions to 2, keep enough variance to see the digit clusters.</p>
+<pre><code>DEMO 1 --- PCA from scratch on scikit-learn's digits dataset
+  Data shape          : 1797 samples, 64 features
+  Centring            : per-feature mean
+  Method              : SVD of centred data
+  Components fitted   : 10
+  Explained variance ratio (top 10):
+    PC  1: 0.149   |   cumulative 0.149
+    PC  2: 0.136   |   cumulative 0.285
+    PC  3: 0.118   |   cumulative 0.403
+    PC  4: 0.084   |   cumulative 0.487
+    PC  5: 0.058   |   cumulative 0.545
+    PC  6: 0.049   |   cumulative 0.594
+    PC  7: 0.043   |   cumulative 0.637
+    PC  8: 0.037   |   cumulative 0.674
+    PC  9: 0.034   |   cumulative 0.707
+    PC 10: 0.031   |   cumulative 0.738
+</code></pre>
+<pre><code>DEMO 2 --- Same data, scikit-learn PCA
+  Components fitted     : 10
+  Explained variance ratio (top 5): 0.149 0.136 0.118 0.084 0.058
+  Reconstruction error (10 components) MSE : 4.9143
+  Maximum |difference| in projections vs from-scratch : 2.18e-14
+</code></pre>
+<pre><code>DEMO 3 --- How many components do we need?
+    k    cumulative variance   reconstruction MSE
+   ---   -------------------   ------------------
+     2                 0.285              13.4210
+     5                 0.545               8.5424
+    10                 0.738               4.9143
+    20                 0.894               1.9843
+    30                 0.959               0.7681
+    40                 0.988               0.2215
+    64                 1.000               0.0000
+</code></pre>
+<p>Three things to pull out.</p>
+<p><strong>The first PC carries 15% of the variance, the second another
+13%.</strong> Together those two PCs explain 28% of the total variance
+in 64-dimensional pixel space. That sounds modest, but the <em>2D
+projection</em> it gives you is good enough to <em>visually</em>
+distinguish most of the ten digit classes — see the header
+image. PCA does not need to capture <em>all</em> the variance to
+produce a useful low-dimensional view; it just needs to capture
+the variance that distinguishes the structure you care about.</p>
+<p><strong>95% variance is reached at ~30 components.</strong> The standard
+heuristic — &ldquo;keep enough components to explain 95% of the
+variance&rdquo; — would compress 64 features to 30 here, with
+reconstruction MSE about 0.77 (in original pixel-intensity
+units, against an original feature range of 0–16). For
+preprocessing pipelines (e.g. PCA before logistic regression
+or before a neural net) this is the typical recipe: pick the
+elbow on the cumulative-variance curve, throw away the rest.</p>
+<p><strong>The from-scratch and sklearn implementations agree to
+floating-point precision.</strong> Maximum absolute difference in
+projected coordinates is <code>2.18e-14</code> — the bit-level rounding
+limit of 64-bit floats. PCA is one of the rare ML algorithms
+where two correct implementations produce <em>byte-identical</em>
+results, modulo the sign ambiguity inherent in SVD.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>The cost story for PCA is dominated by the SVD step:</p>
+<p><strong>Full SVD on the centred data matrix is <code>O(min(n · d², n² · d))</code></strong>
+— typically reported as <code>O(n · d²)</code> when <code>n &gt; d</code> (the common
+case for tall data) and <code>O(n² · d)</code> when <code>d &gt; n</code> (wide data,
+e.g. genomics with thousands of features and hundreds of
+samples). Memory is <code>O(n · d)</code> for the data plus <code>O(d²)</code> for
+the eventual covariance matrix.</p>
+<p>For very high-dimensional data (<code>d &gt; 10⁴</code>) full SVD becomes
+expensive. Two standard speedups:</p>
+<p><strong>Truncated SVD</strong> computes only the top-<code>k</code> singular values and
+vectors, with cost roughly <code>O(n · d · k)</code>. Sklearn&rsquo;s
+<code>PCA(n_components=k)</code> for moderate <code>k</code> and sklearn&rsquo;s
+<code>TruncatedSVD</code> use this internally.</p>
+<p><strong>Randomised SVD</strong> (Halko, Martinsson &amp; Tropp, 2011) — sample a
+random projection of the data, do a small SVD on that, refine.
+Cost <code>O(n · d · log k + (n + d) · k²)</code>, asymptotically much
+faster for <code>k ≪ d</code>. This is what <code>PCA(svd_solver="randomized")</code>
+runs and is the default in sklearn for large <code>n</code> or <code>d</code>.</p>
+<p>For sparse data (text bag-of-words, gene expression with many
+zeros), <code>TruncatedSVD</code> is the right tool. It does not centre
+the data — centring would destroy sparsity — and is
+mathematically equivalent to <strong>Latent Semantic Analysis</strong>
+applied to the term-document matrix.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>PCA is everywhere — usually quietly, as the preprocessing step
+that makes some other algorithm work:</p>
+<p><strong>Visualisation of high-dimensional data.</strong> The five-line recipe
+&ldquo;standardise → PCA(n_components=2) → scatter plot&rdquo; is the
+default first look at any new dataset with more than a few
+features. It is fast, deterministic, and gives an honest answer
+to &ldquo;is there obvious structure here?&rdquo; — which t-SNE and UMAP
+sometimes hallucinate.</p>
+<p><strong>Eigenfaces and classical face recognition.</strong> Turk &amp; Pentland&rsquo;s
+1991 <em>Eigenfaces for Recognition</em> paper showed that the first
+~50 principal components of a face-image database capture
+enough information to recognise faces by nearest-neighbour
+search in PC space. Eigenfaces dominated face recognition for
+a decade and is still a teaching example in every computer
+vision course.</p>
+<p><strong>Whitening for neural network input.</strong> Inputs with strongly
+correlated features can slow neural network training. Whitening
+— PCA followed by scaling each component to unit variance —
+decorrelates the inputs and historically improved CNN training
+significantly (Krizhevsky&rsquo;s ImageNet preprocessing pipeline,
+for example).</p>
+<p><strong>Latent Semantic Analysis (LSA / LSI).</strong> Apply truncated SVD to
+the term-document matrix and the resulting low-dimensional
+&ldquo;topic&rdquo; representations were the dominant text-retrieval
+technique through the 1990s and 2000s. Modern dense
+embeddings have largely displaced LSA, but LSA is still a
+strong baseline and the conceptual ancestor of every
+embedding-based retrieval system.</p>
+<p><strong>Compression and storage.</strong> Dimensionality reduction with PCA
+is a lossy compression scheme — keep <code>k</code> components, drop the
+rest. The reconstruction error is the variance of the dropped
+components. JPEG&rsquo;s DCT and modern image codecs do not use PCA
+directly but use closely-related basis transforms.</p>
+<p><strong>Preprocessing for clustering and classification.</strong> Run PCA to
+reduce 1000 features to 50, then run K-Means or logistic
+regression on the 50-dim representation. This is the standard
+recipe when the original features suffer from the curse of
+dimensionality.</p>
+<p><strong>Genomics and high-throughput biology.</strong> Population structure
+in genome-wide association studies is summarised by the first
+few PCs of the genotype matrix. Single-cell RNA-seq pipelines
+routinely apply PCA before clustering or visualisation.
+Bioinformatics is where PCA gets perhaps the heaviest use in
+2026.</p>
+<p><strong>Anomaly detection.</strong> Reconstruct each point from the top-<code>k</code>
+PCs; points with high reconstruction error are unusual relative
+to the dominant variance directions of &ldquo;normal&rdquo; data. A
+straightforward, interpretable, and surprisingly effective
+anomaly score.</p>
+<p>The pattern is consistent: PCA is rarely the final answer, but
+it is one of the most-used <em>intermediate</em> steps in machine
+learning. If your dataset has more than a few dozen features
+and you have not run PCA on it, you do not yet understand it.</p>
+<hr />
+<h2>When NOT to use PCA</h2>
+<p>PCA&rsquo;s assumptions are strong, and when they break it gives
+misleading results:</p>
+<p><strong>When the structure is genuinely non-linear.</strong> PCA is a <em>linear</em>
+projection — it can only find directions that are linear
+combinations of the original features. Data on a curved
+manifold (digits drawn at varying angles, faces under varying
+illumination, points on a sphere) will look smeared and
+uninformative under PCA. Use <strong>t-SNE</strong>, <strong>UMAP</strong>, or an
+<strong>autoencoder</strong> for non-linear manifolds.</p>
+<p><strong>When you need interpretable individual features.</strong> Each
+principal component is a weighted combination of <em>all</em> the
+original features. &ldquo;PC1 = 0.31 × age + 0.27 × income − 0.18 ×
+zip_code + &hellip;&rdquo; is not an interpretable summary you can show a
+domain expert. Sparse PCA and other variants try to fix this,
+but the unmodified PCs are linear blends that resist
+interpretation.</p>
+<p><strong>When your data is sparse.</strong> Centring a sparse matrix destroys
+the sparsity (zeros become non-zero means). For text
+bag-of-words or one-hot-encoded categoricals, use
+<code>TruncatedSVD</code> (no centring, preserves sparsity) instead of
+plain PCA.</p>
+<p><strong>When your features are non-Gaussian and you want to find
+independent latent factors.</strong> PCA finds <em>uncorrelated</em>
+directions; it does not find <em>independent</em> directions unless the
+data is jointly Gaussian. For independence you want
+<strong>Independent Component Analysis (ICA)</strong> — the standard tool for
+blind source separation in audio and EEG.</p>
+<p><strong>When the variance you care about is small.</strong> PCA orders
+components by total variance. If the structure that matters to
+your downstream task lives in a low-variance direction (a rare
+class concentrated in a small region of feature space, for
+example), PCA will discard it as noise. Supervised dimensionality
+reduction methods (Linear Discriminant Analysis, partial least
+squares, supervised autoencoders) preserve task-relevant
+variance instead.</p>
+<p><strong>When you have categorical features.</strong> PCA assumes continuous
+numeric features. For categorical data use <strong>Multiple
+Correspondence Analysis (MCA)</strong>, the categorical analogue of
+PCA, or one-hot encode and use truncated SVD.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 4 of the Unsupervised Learning track is <strong>t-SNE</strong>
+(t-distributed Stochastic Neighbour Embedding) — the
+non-linear visualisation algorithm that took over scientific
+poster sessions in the early 2010s. Where PCA preserves global
+structure and linearity, t-SNE preserves <em>local</em> neighbourhoods
+and reveals manifold structure that PCA misses. The two are
+complementary tools, often run side-by-side on the same dataset.</p>
+<p>After t-SNE comes <strong>UMAP</strong> — newer, faster, and better at
+preserving global structure than t-SNE — and then NMF, DBSCAN,
+spectral clustering, and the rest of the unsupervised toolkit.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/03-unsupervised-learning/03-principal-component-analysis/pca.py"><strong>pca.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scikit-learn
+python pca.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scikit-learn</code>. The script implements PCA
+from scratch via SVD of the centred data matrix, fits it to
+the 64-dimensional digits dataset, compares against
+scikit-learn&rsquo;s <code>PCA</code> (projections agree to floating-point
+precision), and walks through the cumulative-variance curve
+that tells you how many components to keep. The headline
+insight worth pinning to the wall: <strong>PCA finds the orthogonal
+directions of maximum variance via SVD of the centred data
+matrix, gives you a faithful low-dimensional summary when the
+structure is linear, and is the universal first preprocessing
+step on any dataset with more features than you trust</strong>.</p>
+<hr />
+<p><em>This is Part 3 of the Unsupervised Learning track in the Algorithms in Python series. The companion script <code>pca.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/37727954df03">Part 2</a> covered Hierarchical Clustering. Part 4 will look at t-SNE — the non-linear visualisation algorithm that picks up where PCA&rsquo;s linearity assumption gives out.</em></p>
