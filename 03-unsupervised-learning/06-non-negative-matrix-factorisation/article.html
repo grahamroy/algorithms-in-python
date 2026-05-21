@@ -1,0 +1,355 @@
+<p>In Part 3 we used PCA to decompose the digits dataset into a
+small number of <em>principal components</em> — directions of maximum
+variance in the original 64-dimensional pixel space. Each
+component was a weighted combination of the original features,
+and the weights could be <em>any</em> real number, positive or
+negative. The first principal component of a face dataset, for
+example, often includes positive contributions from &ldquo;bright
+pixels in the cheek region&rdquo; and negative contributions from
+&ldquo;dark pixels in the eye sockets&rdquo;. The component is a real
+direction in feature space, but it is not interpretable as a
+<em>thing</em>; it is a mixture of signed adjustments to many features
+at once.</p>
+<p>Today we look at the dimensionality-reduction technique that
+takes the opposite design choice. <strong>Non-negative Matrix
+Factorisation</strong> (NMF; Lee &amp; Seung, 1999) keeps the same
+&ldquo;decompose <code>X</code> into components plus coefficients&rdquo; framework as
+PCA, but adds one constraint: all the components and all the
+coefficients must be <strong>non-negative</strong>. Negative values are
+forbidden. The data, the components, and the way the components
+combine — all entries are required to be <code>≥ 0</code>.</p>
+<p>The non-negativity constraint sounds technical. The consequence
+is profound: it forces the decomposition to be <strong>additive and
+parts-based</strong>. The components stop being &ldquo;directions in feature
+space&rdquo; and start being &ldquo;parts of the data&rdquo;. On a face dataset
+NMF rediscovers things that look like eyes, noses, mouths,
+hairlines — <em>anatomical parts that combine additively</em> to form
+a face — where PCA gives you &ldquo;eigenfaces&rdquo; that look like
+ghostly amalgamations of multiple faces averaged with positive
+and negative weights. On a text dataset (word counts ≥ 0), NMF
+rediscovers things that look like <em>topics</em> — co-occurring word
+clusters — where PCA gives mathematically valid but
+hard-to-interpret directions.</p>
+<p>NMF underlies modern topic modelling, image-parts decomposition,
+audio source separation, and a substantial fraction of
+recommender systems. It is computationally heavier than PCA
+and lacks PCA&rsquo;s clean theoretical guarantees, but on
+non-negative data — counts, intensities, frequencies,
+amplitudes — it routinely produces decompositions a human can
+actually look at and explain.</p>
+<p>This article builds NMF from first principles. We will derive
+the multiplicative-update algorithm that powers most
+implementations, walk through both flagship applications (text
+topic modelling and image parts decomposition), compare with
+scikit-learn&rsquo;s <code>NMF</code>, and finish with the cases where NMF is
+worth the extra computational cost and the cases where PCA or
+LDA are the better tool.</p>
+<hr />
+<h2>The setup</h2>
+<p>Suppose your data matrix is <code>X</code> with <code>n</code> rows (samples) and
+<code>d</code> columns (features), and every entry is <code>≥ 0</code>. NMF asks for
+an approximate decomposition:</p>
+<pre><code>X ≈ W · H
+</code></pre>
+<p>where:</p>
+<ul>
+<li><code>W</code> is <code>n × k</code> with all entries <code>≥ 0</code> — the &ldquo;encodings&rdquo; of
+  each sample (one row per sample, <code>k</code> non-negative
+  coefficients).</li>
+<li><code>H</code> is <code>k × d</code> with all entries <code>≥ 0</code> — the &ldquo;components&rdquo;
+  (one row per component, each being a non-negative vector in
+  feature space).</li>
+<li><code>k</code> is the number of components, chosen in advance (usually
+  much smaller than <code>d</code>).</li>
+</ul>
+<p>The <code>i</code>-th row of <code>X</code> is then approximately:</p>
+<pre><code>X[i, :] ≈ W[i, 0] · H[0, :] + W[i, 1] · H[1, :] + ... + W[i, k-1] · H[k-1, :]
+</code></pre>
+<p>— a <em>non-negative weighted sum</em> of <code>k</code> non-negative components.
+There is no subtraction. Every sample is a sum of &ldquo;parts&rdquo;
+(rows of <code>H</code>), weighted by how strongly each part is present in
+that sample (the corresponding row of <code>W</code>).</p>
+<p>The objective is to minimise the reconstruction error, usually
+the squared Frobenius norm:</p>
+<pre><code>minimise   ‖X − W · H‖²_F
+subject to W ≥ 0, H ≥ 0
+</code></pre>
+<p>(Alternative objectives — KL divergence, Itakura–Saito — exist
+and are appropriate for different data types; the squared
+Frobenius norm is the default in sklearn and the easiest to
+explain.)</p>
+<p>This is a non-convex problem in <code>(W, H)</code> jointly, but convex in
+each block separately. Like K-Means, NMF is solved by
+alternating optimisation: fix <code>W</code>, update <code>H</code>; fix <code>H</code>, update
+<code>W</code>; repeat.</p>
+<hr />
+<h2>The multiplicative-update algorithm</h2>
+<p>Lee &amp; Seung&rsquo;s 1999 <em>Nature</em> paper gave NMF its breakthrough
+algorithm: <strong>multiplicative updates</strong> that automatically
+preserve non-negativity at every step.</p>
+<p>Start with <code>W</code> and <code>H</code> randomly initialised to positive
+values. Then alternate:</p>
+<pre><code>H_{ij} ← H_{ij} · (Wᵀ X)_{ij} / (Wᵀ W H)_{ij}
+W_{ij} ← W_{ij} · (X Hᵀ)_{ij} / (W H Hᵀ)_{ij}
+</code></pre>
+<p>Two observations.</p>
+<p><strong>The updates are guaranteed non-negative.</strong> Since <code>W</code> and <code>H</code>
+start non-negative, the numerators and denominators are
+non-negative, the multiplicative factor is non-negative, and
+the new values stay non-negative. No projection step is needed.</p>
+<p><strong>The objective is guaranteed to decrease.</strong> Lee &amp; Seung
+proved that each update monotonically decreases the
+reconstruction error. Convergence to a local minimum is
+guaranteed; convergence to the <em>global</em> minimum is not (the
+problem is non-convex jointly in <code>W</code> and <code>H</code>).</p>
+<p>Modern implementations also support:</p>
+<ul>
+<li><strong>Projected gradient descent</strong> — faster convergence on some
+  problems, slightly more complex.</li>
+<li><strong>Coordinate descent</strong> — block updates of individual columns;
+  what sklearn uses by default.</li>
+<li><strong>Sparse NMF variants</strong> — add L1 penalties to <code>W</code> or <code>H</code> to
+  encourage sparse encodings or sparse components.</li>
+<li><strong>Regularised NMF</strong> — Frobenius (L2) penalties for
+  smoother solutions.</li>
+</ul>
+<p>The multiplicative-update algorithm is slower but conceptually
+the cleanest, and the easiest to write from scratch.</p>
+<hr />
+<h2>A worked example: topic modelling on text</h2>
+<p>NMF&rsquo;s flagship application is <strong>topic modelling</strong>: given a
+collection of documents, discover a small number of &ldquo;topics&rdquo;
+each defined by its top words. The companion script applies
+NMF to the 20-newsgroups dataset (a classical corpus of ~18,000
+newsgroup posts from the early 1990s), restricted to 4
+categories — autos, atheism, religion-christian, baseball — to
+keep the topics readable.</p>
+<pre><code>DEMO 1 --- NMF from scratch on 20-newsgroups TF-IDF (4 categories)
+  Data shape : 2270 documents × 1000 vocabulary (TF-IDF)
+  Components : 4
+  Iterations : 200 (multiplicative updates)
+  Final reconstruction error : 45.05 (Frobenius)
+  Topic words (top 8 per component):
+    Topic 0: people don think just know like religion say
+    Topic 1: car cars engine new like dealer good price
+    Topic 2: god jesus believe faith christ does hell bible
+    Topic 3: year team game games runs hit pitching good
+</code></pre>
+<pre><code>DEMO 2 --- Same data, scikit-learn NMF (coordinate descent)
+  Iterations : 200
+  Final reconstruction error : 45.05 (Frobenius)
+  Topic words (top 8 per component):
+    Topic 0: people don think just know like say religion
+    Topic 1: year team game games runs hit pitching baseball
+    Topic 2: car cars engine like new dealer good price
+    Topic 3: god jesus christ faith believe hell bible sin
+</code></pre>
+<pre><code>DEMO 3 --- How many topics? Reconstruction error vs k
+     k   reconstruction error
+   ---   --------------------
+     2                  45.44
+     4                  45.05
+     6                  44.79
+     8                  44.57
+    10                  44.35
+    15                  43.87
+    20                  43.43
+</code></pre>
+<p>Three observations.</p>
+<p><strong>NMF rediscovered three of the four newsgroup categories
+without labels.</strong> The four discovered topics correspond
+clearly to <strong>autos</strong> (car, engine, dealer), <strong>christianity</strong>
+(god, jesus, faith, bible), <strong>baseball</strong> (team, game, hit,
+pitching), and a fourth <strong>general discussion / religion</strong>
+topic that mixes the atheism category with discursive-language
+features (people, think, religion, say). The category-to-topic
+mapping is not perfect — the atheism category lacks a vocabulary
+distinctive enough to claim its own topic at <code>k = 4</code>, so it
+gets folded into a general meta-discussion topic — but the
+three well-vocabularied categories come through cleanly. PCA
+on the same data does not produce topics this readable; its
+components are mixtures of positive and negative TF-IDF
+directions and the top &ldquo;words&rdquo; (by absolute weight) include
+high-magnitude common terms shared across categories.</p>
+<p><strong>The from-scratch implementation matches sklearn.</strong> The two
+algorithms reach the same reconstruction error (<code>45.05</code>) and
+identify the same topics with the same top words (the topic
+ordering differs because NMF is unique only up to permutation).
+Multiplicative updates and coordinate descent converge to
+different local optima in principle, but on this dataset they
+land in essentially the same solution.</p>
+<p><strong>The reconstruction error keeps falling as <code>k</code> grows</strong> — but
+slowly, and the <em>topic interpretability</em> peaks somewhere around
+<code>k = 4</code> to <code>k = 8</code>. With <code>k = 20</code> you get finer-grained topics
+that subdivide categories (e.g. &ldquo;baseball&rdquo; into &ldquo;pitching&rdquo; and
+&ldquo;hitting&rdquo;) — useful sometimes, but eventually you are just
+re-discovering noise. Picking <code>k</code> is the standard
+unsupervised-learning judgement call: reconstruction error
+gives a lower bound on the right value, interpretability gives
+an upper bound, and the answer is somewhere in between.</p>
+<hr />
+<h2>Why parts, not mixtures?</h2>
+<p>PCA&rsquo;s components can have negative entries. To reconstruct a
+sample, PCA <em>adds and subtracts</em> contributions from each
+component. On data that is inherently non-negative — pixel
+intensities, word counts, gene expression, audio amplitudes —
+this means the decomposition cancels positive and negative
+contributions to express each sample. The components themselves
+are not interpretable as anything physical; they are
+mathematical directions that happen to span the variance.</p>
+<p>NMF&rsquo;s non-negativity constraint forbids cancellation. To
+reconstruct a sample, NMF can only <em>add</em> contributions. The
+components must therefore be <em>constituents</em> of the data — each
+one a recognisable sub-structure that genuinely appears in the
+samples. On faces this manifests as components that look like
+eyes, mouths, noses, hair, foreheads. On text as topics. On
+audio as harmonic groups. On gene expression as co-regulated
+gene modules.</p>
+<p>This is not magic — it is what the constraint <em>requires</em>. There
+is no mathematical theorem that says NMF components correspond
+to semantic parts. On well-behaved data they often do. On data
+where the parts assumption is violated (e.g. data that
+genuinely has negative values, or where signals interfere
+destructively) NMF either fails or has to be applied to a
+transformed representation.</p>
+<p>Lee &amp; Seung&rsquo;s original <em>Nature</em> paper made this point
+visually with face decompositions. The &ldquo;NMF parts&rdquo; figure that
+accompanies most introductions to the algorithm is the single
+clearest illustration of why parts-based decomposition matters.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Per iteration cost: each multiplicative update is dominated by
+matrix multiplications <code>Wᵀ · X</code>, <code>Wᵀ · W · H</code>, <code>X · Hᵀ</code>, and
+<code>W · H · Hᵀ</code>. With dimensions <code>n × d</code>, <code>n × k</code>, and <code>k × d</code>,
+the dominant cost is <code>O(n · d · k)</code> per iteration.</p>
+<p>With <code>I</code> iterations (typically 200 to 1000 for convergence),
+total cost is <code>O(I · n · d · k)</code>. For text corpora with <code>n ≈
+10⁵</code>, <code>d ≈ 10⁵</code>, <code>k ≈ 50</code>, that&rsquo;s <code>≈ 10¹³</code> operations per full
+fit — minutes on a modern machine with optimised BLAS, but
+substantially heavier than PCA&rsquo;s <code>O(n · d²)</code> single SVD.</p>
+<p>Memory is <code>O(n · d)</code> for the data (sparse if applicable), plus
+<code>O((n + d) · k)</code> for <code>W</code> and <code>H</code>. NMF&rsquo;s memory profile is
+friendlier than PCA&rsquo;s on sparse high-dimensional data, because
+the dense covariance matrix is never formed.</p>
+<p>For very large datasets, <strong>online NMF</strong> variants update <code>W</code> and
+<code>H</code> from mini-batches of rows, reducing memory and enabling
+streaming fits. Scikit-learn&rsquo;s <code>MiniBatchNMF</code> and the <code>online</code>
+solver in some libraries implement this.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>NMF is everywhere on non-negative data:</p>
+<p><strong>Topic modelling.</strong> NMF is the simpler, faster, and often
+just-as-good cousin of Latent Dirichlet Allocation (LDA).
+Where LDA is a generative probabilistic model with
+hyperparameters and inference algorithms, NMF is straight
+matrix factorisation with a non-negativity constraint. For
+many practical topic-modelling tasks the two produce nearly
+identical topic lists, and NMF is easier to deploy. Most
+production topic-modelling pipelines use one or the other.</p>
+<p><strong>Recommender systems.</strong> Implicit-feedback recommender
+systems — &ldquo;users × items × clicks&rdquo; matrices, where clicks
+are non-negative counts — fit naturally into the NMF
+framework. The decomposition <code>X ≈ W · H</code> gives latent user
+factors (<code>W</code>) and latent item factors (<code>H</code>); recommendations
+are computed by <code>W · H</code> evaluated at unobserved cells.
+Variants like <em>implicit-feedback ALS</em> and <em>weighted NMF</em>
+underlie much of recommendations infrastructure at Spotify
+(circa 2014), Amazon, and Netflix&rsquo;s earlier systems.</p>
+<p><strong>Audio source separation.</strong> A spectrogram (frequency × time
+matrix of audio energies) is non-negative. NMF decomposes it
+into <code>k</code> spectral components and their time-activations.
+Setting <code>k</code> = number of expected sources gives a separation
+of mixed audio into per-source spectrograms — the foundation
+of many audio source-separation systems before deep learning
+took over.</p>
+<p><strong>Hyperspectral unmixing.</strong> Remote-sensing data captures
+per-pixel spectral signatures that are mixtures of multiple
+materials. NMF decomposes the data into endmember spectra
+(<code>H</code>) and per-pixel abundance maps (<code>W</code>) — the literal
+&ldquo;how much of each material is in this pixel&rdquo; answer.</p>
+<p><strong>Single-cell genomics.</strong> Gene-expression matrices (cells ×
+genes, non-negative counts) decompose into &ldquo;gene programs&rdquo;
+(<code>H</code>) and per-cell activations (<code>W</code>) that often correspond
+to interpretable cell-state signatures. Tools like cNMF and
+NMFP shipped specifically for this application.</p>
+<p><strong>Image parts decomposition.</strong> Lee &amp; Seung&rsquo;s original face
+example, plus many subsequent applications to medical imaging,
+microscopy, and astronomy. The &ldquo;discover the visual primitives&rdquo;
+use case.</p>
+<p><strong>Chemometrics.</strong> Spectroscopic data (NMR, mass spec,
+chromatography) decomposes into pure-component spectra and
+mixture coefficients via NMF, used heavily in analytical
+chemistry.</p>
+<p>The pattern: NMF is the right tool when your data is genuinely
+non-negative <em>and</em> you want the decomposition to be
+interpretable. That is a large class of real problems.</p>
+<hr />
+<h2>When NOT to use NMF</h2>
+<p>NMF&rsquo;s strengths come with constraints:</p>
+<p><strong>When the data has genuinely negative values.</strong> Centred
+financial returns, accelerometer signals, anything where the
+sign carries meaning — NMF cannot represent these. Use PCA,
+ICA, or sparse coding.</p>
+<p><strong>When you need a unique solution.</strong> NMF is non-convex; runs
+with different random initialisations produce different
+decompositions. The components are unique only up to scaling
+and permutation. Sklearn&rsquo;s <code>init='nndsvd'</code> mitigates this by
+using a deterministic initialisation, but truly unique answers
+require the SVD-based methods of PCA.</p>
+<p><strong>When you need an orthogonal decomposition.</strong> NMF components
+are not orthogonal in general. PCA&rsquo;s orthogonality is useful
+for downstream applications that need a true basis. NMF does
+not give you one.</p>
+<p><strong>When the data is too sparse and high-dimensional to
+converge well.</strong> A 10-million-document TF-IDF matrix with
+millions of terms is at the edge of practical NMF. Use
+incremental / online variants, or accept that LDA&rsquo;s
+probabilistic framework may converge better.</p>
+<p><strong>When interpretability is not actually the goal.</strong> If you
+just want compression or visualisation, PCA / UMAP are
+faster and have stronger guarantees. Use NMF only when the
+&ldquo;parts&rdquo; interpretation matters.</p>
+<p><strong>When the multiplicative update gets stuck on zeros.</strong> Once
+a <code>W_{ij}</code> or <code>H_{ij}</code> hits zero, the multiplicative update
+keeps it there forever (the update factor multiplies by
+something ≥ 0 but if the current value is 0 it stays 0).
+Modern implementations add small regularisation to prevent
+this; from-scratch implementations need a manual epsilon
+floor.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 7 of the Unsupervised Learning track is <strong>Spectral
+Clustering</strong> — a clustering algorithm built on the
+eigendecomposition of a similarity graph&rsquo;s Laplacian matrix.
+Where K-Means assumes Euclidean spherical clusters and
+hierarchical clustering uses linkage criteria, spectral
+clustering uses the <em>spectrum</em> (eigenvalues) of a graph
+representation to find clusters of arbitrary shape — the
+mathematics that also underlies UMAP&rsquo;s spectral
+initialisation and many modern manifold-learning techniques.</p>
+<p>After spectral clustering the track wraps with Association
+Rule Mining and the track-level overview.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/03-unsupervised-learning/06-non-negative-matrix-factorisation/nmf.py"><strong>nmf.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scikit-learn
+python nmf.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scikit-learn</code>. The script implements
+NMF from scratch using Lee &amp; Seung&rsquo;s multiplicative-update
+algorithm, fits it to a 4-category subset of the 20-newsgroups
+dataset (<code>autos</code>, <code>atheism</code>, <code>christianity</code>, <code>baseball</code>),
+displays the top words per discovered topic, and compares
+against scikit-learn&rsquo;s <code>NMF</code> (which finds essentially the same
+topics). A small <code>k</code>-sweep shows how reconstruction error
+falls with more components. The headline insight worth pinning
+to the wall: <strong>NMF decomposes non-negative data into a sum of
+non-negative parts; on text the parts are topics, on faces
+they are facial features, on audio they are spectral
+templates, and on gene expression they are co-regulated gene
+programmes</strong>.</p>
+<hr />
+<p><em>This is Part 6 of the Unsupervised Learning track in the Algorithms in Python series. The companion script <code>nmf.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/baae695bcfd6">Part 5</a> covered UMAP. Part 7 will look at Spectral Clustering — graph-Laplacian-based clustering for arbitrary cluster shapes.</em></p>
