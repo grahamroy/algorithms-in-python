@@ -1,0 +1,383 @@
+<p>In Part 4 we built t-SNE — the non-linear visualisation algorithm
+that took over scientific posters and ML demos for nearly a
+decade. It works beautifully on a few thousand points and shows
+non-linear cluster structure that PCA cannot. But it has three
+well-known failure modes: it is <strong>slow</strong> beyond a few thousand
+points, it preserves <em>local</em> neighbourhoods at the cost of
+<strong>global structure</strong> (clusters end up in arbitrary positions
+relative to each other), and it has <strong>no transform method</strong> —
+new points cannot be embedded into an existing t-SNE plot
+without re-running the whole optimisation.</p>
+<p><strong>UMAP</strong> (Uniform Manifold Approximation and Projection; McInnes,
+Healy &amp; Melville, 2018) is the algorithm that fixed all three.
+It is grounded in a different mathematical foundation — Riemannian
+geometry and fuzzy simplicial complexes — but the operational
+recipe is similar: build a graph in high dimensions, find a
+low-dimensional arrangement that matches it. UMAP&rsquo;s loss is
+<strong>cross-entropy</strong> instead of KL divergence, its high-d graph
+includes <strong>adaptive local connectivity</strong>, and its optimisation
+uses <strong>negative sampling</strong> — and the combination is dramatically
+faster than t-SNE, preserves more of the global structure, and
+produces a re-usable transformation that can embed new points
+without re-fitting.</p>
+<p>Since around 2020, UMAP has largely displaced t-SNE in
+single-cell RNA-seq (the dominant scientific application), in
+visualisation of word and sentence embeddings, and in any setting
+where the dataset is too large for Barnes–Hut t-SNE. It is also
+the default in Google&rsquo;s TensorBoard projector, in many
+vector-database visualisation tools, and in the AnnData /
+Scanpy / Seurat single-cell stacks.</p>
+<p>This article builds UMAP from first principles. We will explain
+the fuzzy-simplicial-complex view of the high-dimensional graph,
+walk through the cross-entropy optimisation in low dimensions,
+implement a minimal from-scratch version on a tiny dataset to
+make the algorithm tangible, compare with the official
+<code>umap-learn</code> library on the digits dataset (alongside t-SNE
+and PCA), and finish with the cases where UMAP is the right
+default — and the few where it is not.</p>
+<hr />
+<h2>The two-line summary</h2>
+<p>UMAP, like t-SNE, has a high-dimensional and a low-dimensional
+representation, and the algorithm minimises the gap between
+them. The difference is in the <em>shape</em> of those representations.</p>
+<p><strong>High dimensions.</strong> Build a weighted <em>k</em>-nearest-neighbour
+graph. For each point, the edge weight to its <code>n_neighbors</code>
+nearest neighbours is a smooth function of distance, calibrated
+so the <em>local connectivity</em> is uniform across the dataset (each
+point has approximately the same effective number of connected
+neighbours, regardless of local density). The resulting graph is
+a <strong>fuzzy simplicial complex</strong> — a weighted graph whose edge
+weights live in <code>[0, 1]</code> and represent the &ldquo;probability&rdquo; that
+two points are neighbours on the underlying manifold.</p>
+<p><strong>Low dimensions.</strong> Initialise points in 2-D (UMAP uses spectral
+initialisation by default — eigenvectors of the graph Laplacian).
+Compute analogous edge weights between the low-dimensional
+points using a parametric curve <code>1 / (1 + a · d^(2b))</code> —
+similar in spirit to t-SNE&rsquo;s Student-t kernel, with <code>a</code> and
+<code>b</code> chosen to match a target <code>min_dist</code> parameter.</p>
+<p><strong>Loss.</strong> Cross-entropy between the high-d and low-d edge-weight
+matrices. Roughly: pairs that are strongly connected in high-d
+should also be strongly connected in low-d, and pairs that are
+weakly connected should stay weakly connected.</p>
+<p><strong>Optimisation.</strong> Stochastic gradient descent with <strong>negative
+sampling</strong>. For each iteration: pick a random edge in the
+high-d graph and pull its endpoints together in low-d
+(attractive force); pick a few random non-edges and push their
+endpoints apart (repulsive force). This is dramatically cheaper
+than t-SNE&rsquo;s full-pairwise gradient.</p>
+<p>The whole loop is <code>O(n · m)</code> per iteration with <code>m</code> the number of
+edges in the k-NN graph (<code>m ≈ n · n_neighbors</code>), so effectively
+linear in the dataset size. That is the speed win.</p>
+<hr />
+<h2>What UMAP changes compared to t-SNE</h2>
+<p>Three design choices distinguish UMAP from t-SNE in ways that
+matter operationally:</p>
+<p><strong>Adaptive local connectivity.</strong> t-SNE&rsquo;s perplexity sets the
+effective neighbourhood size uniformly across the dataset. UMAP
+adapts: for each point it sets the local connectivity so the
+nearest neighbour is at distance zero (probability 1.0 of being
+a neighbour) and the <code>n_neighbors</code>-th neighbour is at the
+<em>relevant</em> distance for that point. This handles datasets with
+strong density variation much better — t-SNE tends to over-spread
+sparse regions, UMAP keeps them in proportion.</p>
+<p><strong>Cross-entropy instead of KL divergence.</strong> Both objectives
+penalise mismatch between high-d and low-d similarity, but
+they weight the costs differently. UMAP&rsquo;s cross-entropy also
+penalises <em>false connections</em> — putting two points close in
+low-d that were not close in high-d. t-SNE&rsquo;s KL only directly
+penalises <em>missed connections</em>. The result: UMAP holds onto
+inter-cluster gaps better.</p>
+<p><strong>Stochastic gradient descent with negative sampling.</strong> Each
+iteration only touches one positive edge and a few negative
+samples, instead of summing over all pairs. This is what makes
+UMAP fast — and what gives it a transform method: a fitted
+UMAP model can embed new points by running the same SGD
+procedure with the existing low-d coordinates frozen.</p>
+<p><strong>Global structure is better preserved.</strong> The combination of
+adaptive connectivity and cross-entropy loss means inter-cluster
+distances in a UMAP plot carry <em>some</em> signal about
+inter-cluster distances in the original space. Not exactly, and
+the algorithm authors are careful to caveat this, but
+substantially more than t-SNE.</p>
+<hr />
+<h2>The algorithm</h2>
+<p>A simplified UMAP fit loop, with the details of the
+fuzzy-simplicial-complex construction abstracted into helper
+functions:</p>
+<pre><code>fit(X, n_neighbors=15, min_dist=0.1, n_components=2,
+    n_epochs=200):
+    # 1. Build the high-d fuzzy simplicial complex
+    knn = nearest_neighbors(X, k=n_neighbors)
+    rho = distance_to_nearest_neighbor(knn)   # per-point
+    sigma = adaptive_bandwidth(knn, rho,
+                               target=log2(n_neighbors))
+    high_weights = fuzzy_membership(knn, rho, sigma)
+    # symmetrise (probabilistic OR): u + v - u*v
+    P = high_weights + high_weights.T \
+        - high_weights * high_weights.T
+
+    # 2. Initialise low-d embedding spectrally
+    Y = spectral_init(P, n_components)
+
+    # 3. Curve parameters fit so 1/(1+a*d^(2b)) matches min_dist
+    a, b = fit_curve(min_dist, spread=1.0)
+
+    # 4. Optimise by SGD with negative sampling
+    for epoch in 1..n_epochs:
+        for edge in sample_edges(P):
+            i, j = edge.endpoints
+            # Attractive: pull i and j together
+            grad = attractive_grad(Y[i], Y[j], a, b)
+            Y[i] += lr * grad;  Y[j] -= lr * grad
+
+            for _ in range(n_negative_samples):
+                k = random_point()
+                # Repulsive: push i and k apart
+                grad = repulsive_grad(Y[i], Y[k], a, b)
+                Y[i] += lr * grad
+
+        lr *= 1 - epoch / n_epochs   # linear cooldown
+
+    return Y
+</code></pre>
+<p>This is the conceptual algorithm. The official <code>umap-learn</code>
+implementation is JIT-compiled with Numba for speed, uses the
+PyNNDescent approximate-k-NN library for the initial graph (so
+the graph construction is itself sub-quadratic), and has many
+parameter knobs we will not cover. But the essential structure
+is what is above: high-d graph, low-d initialisation, SGD with
+negative sampling.</p>
+<hr />
+<h2>The parameters that matter</h2>
+<p>Two knobs do most of the work in practice:</p>
+<p><strong><code>n_neighbors</code> (default 15).</strong> Analogous to t-SNE&rsquo;s perplexity.
+Smaller values (5 to 15) focus on local structure and tighter
+clusters; larger values (50 to 200) preserve more global
+structure at the cost of cluster definition. The default 15 is
+a reasonable starting point for most problems and is much
+<em>less</em> sensitive than t-SNE&rsquo;s perplexity — UMAP plots at
+<code>n_neighbors = 10</code> and <code>n_neighbors = 50</code> look much more
+similar than t-SNE plots at perplexity 10 vs 50.</p>
+<p><strong><code>min_dist</code> (default 0.1).</strong> Controls how tightly packed the
+low-d clusters are. Small <code>min_dist</code> (0.0 to 0.1) gives tight,
+crisply-separated clusters good for visualising discrete
+classes. Large <code>min_dist</code> (0.5 to 1.0) spreads clusters out and
+preserves more of the continuous topology — useful for
+exploring smooth manifolds (e.g. images of faces under varying
+illumination, where there are no clean clusters but a
+continuous family).</p>
+<p>Other parameters matter less:</p>
+<ul>
+<li><code>metric</code> — Euclidean by default. Cosine for normalised
+  embeddings (Word2Vec, sentence transformers). Manhattan,
+  Hamming, and many others supported.</li>
+<li><code>n_components</code> — 2 for plots, 3 for interactive 3D, but UMAP
+  can also be used as a non-linear feature extractor with
+  <code>n_components = 10</code> or higher (this is where its <code>transform</code>
+  method shines).</li>
+<li><code>n_epochs</code> — default is &ldquo;auto&rdquo; (200 for big data, 500 for
+  small). Rarely needs tuning.</li>
+</ul>
+<p>The combination <code>n_neighbors=15, min_dist=0.1, metric='euclidean'</code>
+is the sklearn-like sensible default and gives publishable plots
+on the vast majority of datasets.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script runs UMAP, t-SNE, and PCA side-by-side on
+the digits dataset (same 1797 × 64 dataset we have been using
+since Part 3) and reports the KNN-in-2D accuracy that
+quantifies how well each visualisation preserves class
+structure.</p>
+<pre><code>DEMO 1 --- UMAP (umap-learn) on the digits dataset
+  Data shape          : 1797 samples, 64 features
+  n_neighbors         : 15
+  min_dist            : 0.1
+  Wall time (fit)     : 8.75 s
+  KNN accuracy in 2D  : 0.976
+</code></pre>
+<pre><code>DEMO 2 --- scikit-learn TSNE (Barnes-Hut) for comparison
+  Perplexity          : 30
+  Wall time (fit)     : 3.51 s
+  KNN accuracy in 2D  : 0.969
+</code></pre>
+<pre><code>DEMO 3 --- scikit-learn PCA (2 components)
+  Cumulative variance explained : 0.285
+  Wall time (fit)               : 0.00 s
+  KNN accuracy in 2D            : 0.624
+</code></pre>
+<pre><code>DEMO 4 --- UMAP transform on held-out new points
+  Fit on 1437 train points; transform 360 held-out test points
+  KNN accuracy on held-out test set in 2D : 0.981
+</code></pre>
+<p>Four observations.</p>
+<p><strong>On a small dataset like this one (n = 1797), t-SNE is
+actually faster than UMAP</strong> — 3.5 s vs 8.8 s. UMAP&rsquo;s wins are
+asymptotic: graph construction has fixed overhead that pays
+off only at scale. On the 60k-point MNIST dataset, t-SNE takes
+minutes while UMAP runs in under a minute; on a million-point
+single-cell dataset, t-SNE is impractical while UMAP finishes
+in tens of minutes. For the small datasets that fit in a
+Jupyter cell, t-SNE is fine; for everything bigger, UMAP is
+the right tool.</p>
+<p><strong>UMAP&rsquo;s KNN accuracy slightly beats t-SNE&rsquo;s</strong> (97.6% vs
+96.9%), which is typical — UMAP&rsquo;s better global-structure
+preservation tends to produce slightly cleaner cluster
+boundaries.</p>
+<p><strong>UMAP can embed new points.</strong> Demo 4 fits UMAP on 80% of the
+data and projects the held-out 20% into the same 2-D space.
+KNN-in-2D on the held-out set is 98.1% — actually slightly
+<em>better</em> than the fit-on-everything run, because the smaller
+training set produced tighter, more separated clusters. <em>t-SNE
+cannot do this at all.</em> If your pipeline needs to visualise
+streaming data in a stable layout, UMAP is the only viable
+choice.</p>
+<p><strong>PCA is essentially instantaneous</strong> — milliseconds versus
+seconds for the non-linear methods. On data where the
+structure is linear it will be just as good. PCA remains the
+right first reach. UMAP is for when PCA is not enough <em>and</em>
+the dataset is too big for t-SNE.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>UMAP&rsquo;s effective scaling is dramatically better than t-SNE:</p>
+<p><strong>Graph construction.</strong> PyNNDescent&rsquo;s approximate k-NN runs in
+roughly <code>O(n^1.14)</code> empirically — sub-quadratic in <code>n</code>. Exact
+k-NN would be <code>O(n²)</code> but is rarely needed.</p>
+<p><strong>Optimisation.</strong> Each epoch touches <code>O(n · n_neighbors)</code> edges,
+plus a fixed number of negative samples per edge. Total
+optimisation cost is <code>O(n · n_neighbors · n_epochs)</code> — linear
+in <code>n</code> for fixed <code>n_neighbors</code>.</p>
+<p><strong>Memory.</strong> <code>O(n · n_neighbors)</code> for the sparse graph. The
+quadratic full-pairwise representations that t-SNE needs are
+avoided entirely.</p>
+<p>In practice UMAP handles 100,000 points in a minute or so and
+millions of points within the practical limits of single-node
+analysis. For comparison, sklearn t-SNE struggles past 50,000
+points even with Barnes-Hut.</p>
+<hr />
+<h2>What UMAP preserves and does not</h2>
+<p>UMAP shares many of t-SNE&rsquo;s caveats — visualisations of
+non-linear projections are inherently lossy — but the
+quantitative behaviour differs in important ways:</p>
+<p><strong>Better preserved.</strong> Global structure. The relative positions
+of well-separated clusters in a UMAP plot tend to carry signal
+about their distances in the original space, <em>much</em> more than
+t-SNE. Still not exact — do not measure distances directly —
+but useful.</p>
+<p><strong>Better preserved.</strong> Cluster sizes. UMAP&rsquo;s adaptive
+connectivity means dense regions of the original data stay
+dense in the embedding, and sparse regions stay sparse.</p>
+<p><strong>Same problem.</strong> Local distances inside a cluster are not
+metric in the embedding. The reasons that distances in a 2-D
+projection of high-d data are inherently distorted apply
+equally to UMAP and t-SNE.</p>
+<p><strong>Same problem.</strong> Random initialisation produces somewhat
+different layouts run-to-run. UMAP is more stable than t-SNE
+(spectral init helps), but for production-grade reproducibility
+you still need to pin the random seed.</p>
+<p><strong>UMAP-specific.</strong> Mathematical foundations rely on
+manifold-uniform-density assumptions that real data does not
+satisfy. The McInnes et al paper is careful about this; the
+algorithm works <em>better</em> than the theory strictly licenses, an
+empirical mystery that has not been fully resolved.</p>
+<p>The honest summary: <strong>UMAP is t-SNE with most of the caveats
+turned down</strong>. It is the right default for new projects;
+t-SNE remains in use mostly out of inertia and for consistency
+with older publications.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>UMAP&rsquo;s footprint has grown rapidly since 2018:</p>
+<p><strong>Single-cell RNA-seq.</strong> The dominant application. Scanpy
+(Python) and Seurat (R) — the two standard single-cell
+analysis frameworks — both default to UMAP for visualisation,
+and most single-cell papers since 2020 use UMAP rather than
+t-SNE.</p>
+<p><strong>LLM and embedding visualisation.</strong> Visualising clusters of
+sentence-BERT embeddings, OpenAI embedding vectors, or any
+modern semantic embedding space is almost always UMAP these
+days. The combination of speed (millions of vectors) and global
+structure preservation makes it the right tool.</p>
+<p><strong>Vector-database exploration.</strong> Pinecone, Weaviate, Chroma,
+and friends typically ship UMAP visualisations as part of their
+debugging UIs.</p>
+<p><strong>Deep representation analysis.</strong> Inspecting what a deep model
+has learned — passing inputs through the network, collecting
+penultimate-layer activations, projecting to 2D — used to be a
+t-SNE workflow, now overwhelmingly UMAP.</p>
+<p><strong>Anomaly inspection.</strong> Outliers in UMAP plots stand out
+naturally. Coupled with HDBSCAN on the original (or PCA-reduced)
+data, UMAP visualisation plus density-based clustering is the
+standard &ldquo;look for unusual structure in this dataset&rdquo; recipe.</p>
+<p><strong>As a feature extractor.</strong> With <code>n_components = 20</code> or <code>50</code>,
+UMAP can replace PCA as the dimensionality-reduction step in a
+larger ML pipeline. The fact that it preserves non-linear
+structure makes it stronger than PCA for downstream
+classification or clustering on data with curved manifolds.
+This use is growing.</p>
+<p><strong>Topological data analysis.</strong> UMAP&rsquo;s foundations in algebraic
+topology mean it integrates cleanly with
+topological-data-analysis (TDA) workflows — persistent homology, Mapper, and
+similar techniques where the <em>shape</em> of the data matters.</p>
+<p>The pattern: UMAP is now the default visualisation algorithm
+for high-dimensional data, and increasingly also a default
+non-linear dimensionality reducer in production pipelines.</p>
+<hr />
+<h2>When NOT to use UMAP</h2>
+<p>UMAP is a strong default, not a universal one:</p>
+<p><strong>When you need a linear projection.</strong> PCA is faster, gives an
+interpretable orthonormal basis, has well-understood properties,
+and is the right choice when the structure is linear. Use UMAP
+only when you suspect non-linearity matters.</p>
+<p><strong>When you specifically need t-SNE behaviour.</strong> For replication
+of published t-SNE plots, or in workflows that have been
+calibrated to t-SNE&rsquo;s idiosyncrasies, switching tools is not
+free. t-SNE is still a fine algorithm — UMAP is just usually
+better.</p>
+<p><strong>When you need a true clustering.</strong> UMAP is a visualisation
+and dimensionality-reduction algorithm, not a clustering one.
+Run HDBSCAN, K-Means, or hierarchical clustering on the
+<em>original</em> features (or PCA-reduced versions); use UMAP only to
+<em>see</em> what those clusters look like.</p>
+<p><strong>When determinism matters absolutely.</strong> The SGD has random
+elements, and different seeds give different layouts. Pin
+seeds carefully and document them.</p>
+<p><strong>When the dataset is genuinely tiny.</strong> Below ~200 points the
+overhead of building the k-NN graph dominates and PCA is fine.</p>
+<p><strong>Production embedding pipelines that need fast inference.</strong>
+The <code>transform</code> method exists but is slower than PCA&rsquo;s matrix
+multiply. For latency-sensitive inference, train a feed-forward
+network to mimic the UMAP embedding (parametric UMAP) or use
+PCA.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 6 of the Unsupervised Learning track is <strong>Non-negative
+Matrix Factorisation (NMF)</strong> — a different kind of
+dimensionality reduction in which the components and the
+coefficients are required to be non-negative. The non-negativity
+constraint forces an <em>additive</em>, parts-based decomposition —
+think &ldquo;image as a sum of facial features&rdquo; rather than PCA&rsquo;s
+mixtures of positives and negatives — and underlies topic
+modelling, recommender systems with implicit feedback, and
+several audio-source separation methods.</p>
+<p>After NMF the track turns to spectral clustering, association
+rule mining, and the wrap-up of the unsupervised toolkit.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/03-unsupervised-learning/05-umap/umap_demo.py"><strong>umap_demo.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scikit-learn umap-learn
+python umap_demo.py
+</code></pre>
+<p>It needs <code>numpy</code>, <code>scikit-learn</code>, and <code>umap-learn</code> (the
+official UMAP package — not in sklearn). The script runs
+UMAP, t-SNE, and PCA side-by-side on the digits dataset,
+reports wall times and KNN-in-2D accuracies that quantify how
+well each method preserves class structure, then demonstrates
+UMAP&rsquo;s <code>transform</code> method by fitting on 80% of the data and
+embedding the held-out 20%. The headline insight worth
+pinning to the wall: <strong>UMAP is t-SNE with most of the caveats
+turned down — faster, more stable, better at preserving global
+structure, and able to embed new points without re-fitting</strong>.</p>
+<hr />
+<p><em>This is Part 5 of the Unsupervised Learning track in the Algorithms in Python series. The companion script <code>umap_demo.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/cf350f568674">Part 4</a> covered t-SNE. Part 6 will look at Non-negative Matrix Factorisation — additive, parts-based decomposition that underlies topic modelling and recommender systems.</em></p>
