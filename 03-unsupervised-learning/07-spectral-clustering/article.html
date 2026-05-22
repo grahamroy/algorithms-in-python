@@ -1,0 +1,357 @@
+<p>K-Means (Part 1) and hierarchical clustering with Ward linkage
+(Part 2) share a quiet assumption: clusters are roughly
+spherical blobs in Euclidean space. On the 3-Gaussian-blob
+dataset we used for both, that assumption was correct and both
+algorithms recovered the true structure perfectly. On the
+two-moons dataset that K-Nearest Neighbours, decision trees,
+and the rest of the supervised track all handled comfortably,
+K-Means asked to find two clusters draws a straight line right
+through both moons and produces two perfectly-wrong groups.</p>
+<p>The reason is structural. K-Means&rsquo; decision boundary is the
+perpendicular bisector between cluster centroids — a straight
+line in 2D, a hyperplane in higher dimensions. Hierarchical
+clustering with Ward linkage shares the variance-minimisation
+objective and behaves similarly. Both fail on data where the
+true clusters are <em>connected</em> but not <em>compact</em> — half-moons,
+nested circles, S-shapes, anything where the natural cluster
+structure is topological rather than geometric.</p>
+<p><strong>Spectral Clustering</strong> (Shi &amp; Malik, 2000; Ng, Jordan &amp;
+Weiss, 2002) is the algorithm that handles this. The key move
+is to stop thinking of the data as points in Euclidean space
+and start thinking of it as a <em>graph</em>. Each data point is a
+node; an edge connects two nodes if the points are similar
+(close in feature space). The cluster structure of the graph
+is then captured by the <strong>eigenvectors of the graph Laplacian</strong>
+— a matrix that encodes the graph&rsquo;s connectivity. The bottom
+few eigenvectors give a new &ldquo;spectral embedding&rdquo; of the data
+in which K-Means can finally find the right partitions.</p>
+<p>Spectral clustering is the workhorse of image segmentation, the
+foundation of community detection in social-network analysis,
+and the mathematical engine that powers UMAP&rsquo;s spectral
+initialisation (Part 5) and many other modern manifold-learning
+techniques. The Laplacian eigenvectors that drive it are the
+same objects that show up in graph signal processing, in
+diffusion maps, and in the random-walk analysis of Markov
+chains. Spectral clustering is the entry point to all of this
+machinery.</p>
+<p>This article builds spectral clustering from first principles.
+We will define the affinity matrix and the graph Laplacian,
+derive the algorithm from the relaxation of the <em>normalised
+cut</em> objective, implement it from scratch, run it on the
+two-moons dataset where K-Means famously fails, compare with
+scikit-learn&rsquo;s <code>SpectralClustering</code>, and finish with the
+practical considerations that determine when the algorithm
+shines and when it falls over.</p>
+<hr />
+<h2>The two-line summary</h2>
+<ol>
+<li>Build a weighted similarity graph from your data: nodes =
+   data points, edge weights = pairwise similarities.</li>
+<li>Take the bottom <code>K</code> eigenvectors of the graph Laplacian,
+   stack them as columns of an <code>n × K</code> matrix, and run K-Means
+   on the rows.</li>
+</ol>
+<p>That is the algorithm. The hard work is hidden in two places:
+constructing the right affinity graph (which similarity metric,
+how to sparsify), and computing the Laplacian eigenvectors
+(numerically delicate at scale).</p>
+<p>Why does it work? Eigenvectors of the graph Laplacian
+corresponding to small eigenvalues are <em>nearly constant within
+connected components of the graph</em>. If the graph has <code>K</code>
+disconnected components, the bottom <code>K</code> eigenvectors are
+exactly the component indicator vectors (each one is <code>1</code> on
+one component, <code>0</code> elsewhere). For graphs that are &ldquo;almost
+disconnected&rdquo; — strong connections within clusters, weak
+connections between — the bottom <code>K</code> eigenvectors are nearly
+indicator vectors, and K-Means in this <code>K</code>-dim eigenvector
+space trivially separates them.</p>
+<hr />
+<h2>The affinity matrix</h2>
+<p>The first design choice is how to turn <code>n</code> data points into a
+weighted graph.</p>
+<p><strong>k-nearest-neighbour graph.</strong> Connect each point to its <code>k</code>
+nearest neighbours. The edge weight is either <code>1</code> (binary k-NN
+graph) or a similarity score like <code>exp(-‖x_i - x_j‖² / σ²)</code>.
+Default <code>k</code> is something like 10. This produces a sparse graph,
+which makes the eigendecomposition tractable on larger
+datasets.</p>
+<p><strong>ε-neighbourhood graph.</strong> Connect every pair of points within
+distance <code>ε</code>. Simple but <code>ε</code> is hard to tune — too small and
+the graph fragments, too large and everything connects to
+everything.</p>
+<p><strong>Fully-connected RBF graph.</strong> Connect every pair, weight by
+<code>exp(-‖x_i - x_j‖² / (2σ²))</code>. Dense <code>n × n</code> affinity matrix.
+Best statistical properties; worst scalability. The natural
+choice for small datasets.</p>
+<p>The bandwidth <code>σ</code> of the RBF kernel is the most important knob
+in spectral clustering. Too small and the affinities are
+all-or-nothing (the algorithm finds singleton clusters); too
+large and every point is similar to every other (the algorithm
+collapses to one cluster). A common heuristic: set <code>σ</code> to the
+median pairwise distance, or use a per-point adaptive scale
+(Zelnik-Manor &amp; Perona, 2004).</p>
+<p>For the companion script we use a fully-connected RBF graph
+since the dataset is small and the dense Laplacian fits in
+memory.</p>
+<hr />
+<h2>The graph Laplacian</h2>
+<p>Given the <code>n × n</code> affinity matrix <code>W</code>, the <strong>degree matrix</strong>
+<code>D</code> is diagonal with <code>D_{ii} = Σ_j W_{ij}</code> — the total weight
+incident to node <code>i</code>.</p>
+<p>The <strong>unnormalised Laplacian</strong> is:</p>
+<pre><code>L = D - W
+</code></pre>
+<p>It is symmetric, positive semi-definite (all eigenvalues ≥ 0),
+and its smallest eigenvalue is exactly <code>0</code> with eigenvector
+<code>(1, 1, ..., 1) / √n</code>. For a graph with <code>K</code> connected
+components, the multiplicity of the <code>0</code> eigenvalue is exactly
+<code>K</code> — and the corresponding eigenvectors are indicator vectors
+for the components. This is the foundational property: <em>the
+spectrum of the Laplacian reveals the connectivity structure
+of the graph</em>.</p>
+<p>The <strong>symmetric normalised Laplacian</strong> is:</p>
+<pre><code>L_sym = I - D^(-1/2) · W · D^(-1/2)
+</code></pre>
+<p>Better-conditioned numerically and almost always preferred in
+practice. Ng, Jordan &amp; Weiss&rsquo;s algorithm (2002) uses
+<code>L_sym</code>; Shi &amp; Malik&rsquo;s original formulation uses the
+random-walk normalised Laplacian <code>L_rw = I - D^(-1) · W</code>
+which has the same eigenvalues and very similar eigenvectors.</p>
+<p>For the rest of this article we use <code>L_sym</code>; it is the
+sklearn default and gives the cleanest derivation.</p>
+<hr />
+<h2>The full algorithm</h2>
+<p>Putting it together:</p>
+<pre><code>spectral_cluster(X, K, sigma, k_nn=None):
+    # 1. Build the affinity matrix W
+    W = rbf_affinity(X, sigma) (sparsify with k_nn if requested)
+
+    # 2. Degree and normalised Laplacian
+    d = W.sum(axis=1)
+    D_inv_sqrt = diag(1 / sqrt(d))
+    L_sym = I - D_inv_sqrt @ W @ D_inv_sqrt
+
+    # 3. Take the K smallest eigenvectors of L_sym
+    eigvals, eigvecs = eigh(L_sym)  # ascending order
+    U = eigvecs[:, :K]               # n x K matrix
+
+    # 4. Normalise rows of U (Ng-Jordan-Weiss recipe)
+    U_norm = U / norm(U, axis=1, keepdims=True)
+
+    # 5. K-Means in the K-dim spectral embedding
+    labels = KMeans(n_clusters=K).fit_predict(U_norm)
+    return labels
+</code></pre>
+<p>Two things worth noting.</p>
+<p>The K-Means in step 5 is <em>not</em> clustering in the original
+feature space. It is clustering in the K-dimensional space
+spanned by the bottom K Laplacian eigenvectors. On this
+transformed representation the clusters are well-separated
+spheres even when they were curved manifolds in the original
+space.</p>
+<p>The row-normalisation in step 4 is the Ng-Jordan-Weiss trick.
+Without it the algorithm still works but the eigenvector
+coordinates have very different scales across rows and K-Means
+struggles. The normalisation puts every row on the unit sphere
+in <code>K</code> dimensions, which makes the K-Means clusters tight and
+well-defined.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script runs spectral clustering on three
+datasets that span K-Means&rsquo; failure modes:</p>
+<ul>
+<li><strong>3 Gaussian blobs</strong> (where K-Means succeeds) — sanity check.</li>
+<li><strong>2 interleaving moons</strong> (where K-Means fails) — the
+  textbook spectral-clustering use case.</li>
+<li><strong>2 concentric circles</strong> (where K-Means fails badly) — even
+  harder structure.</li>
+</ul>
+<pre><code>DEMO 1 --- Spectral clustering from scratch on 3 datasets
+  Affinity      : k-NN graph with local Gaussian scale (k=10)
+  Laplacian     : symmetric normalised
+  Clustering    : K-Means in eigenvector space
+
+  Dataset          K   Spectral ARI     K-Means ARI
+  ---------------  -   ------------     -----------
+  3 blobs          3          1.000           1.000
+  2 moons          2          1.000           0.234
+  2 circles        2          1.000          -0.003
+</code></pre>
+<pre><code>DEMO 2 --- Same data, scikit-learn SpectralClustering
+  Dataset          K  Sklearn ARI     Agreement vs from-scratch
+  ---------------  -  -----------     -------------------------
+  3 blobs          3        1.000                         1.000
+  2 moons          2        1.000                         1.000
+  2 circles        2        1.000                         1.000
+</code></pre>
+<pre><code>DEMO 3 --- Why does it work? Eigenvector inspection on moons
+  Bottom 4 eigenvalues of L_sym (moons, n=300):
+    lambda_0 = 0.0000  (always; constant vector)
+    lambda_1 = 0.0000  (the cluster-separating eigenvector)
+    lambda_2 = 0.0018  (start of &quot;within-cluster&quot; structure)
+    lambda_3 = 0.0021
+
+  Gap between lambda_1 and lambda_2 : 0.0018
+  (Large gap = clean K=2 structure)
+</code></pre>
+<p>Three observations.</p>
+<p><strong>Spectral clustering recovers the true labels on all three
+datasets</strong> — including the two that K-Means cannot solve.
+On the moons, K-Means gets ARI 0.23 (essentially random with
+a slight class-imbalance lift); on the concentric circles
+K-Means gets ARI −0.003 (worse than random — the inner and
+outer circle share a centroid, so K-Means&rsquo; partition has no
+relationship to the true structure). Spectral clustering
+gets 1.000 on both.</p>
+<p><strong>The eigenvalue gap predicts when spectral clustering will
+work.</strong> On the k-NN moons graph the two moons are <em>almost</em>
+disconnected components, so <code>lambda_0</code> and <code>lambda_1</code> are
+both essentially zero — the graph behaves as two near-isolated
+pieces. <code>lambda_2</code> is the first &ldquo;within-cluster&rdquo; eigenvalue at
+<code>0.0018</code>. The gap between <code>lambda_1</code> and <code>lambda_2</code> is what
+makes the K=2 partition robust. The &ldquo;eigengap heuristic&rdquo; for
+choosing <code>K</code> is exactly this: count the near-zero eigenvalues
+before the first big jump.</p>
+<p><strong>Spectral clustering agrees with sklearn on every example.</strong>
+The from-scratch implementation matches <code>SpectralClustering</code>
+on all three datasets, which is reassuring since spectral
+clustering has more parameter choices (affinity kernel,
+normalisation variant) than most algorithms.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>The two big costs:</p>
+<p><strong>Affinity matrix construction.</strong> Dense RBF is <code>O(n² · d)</code> in
+time and <code>O(n²)</code> in memory. For sparse k-NN graphs the cost
+drops to roughly <code>O(n · k · d)</code> using approximate nearest
+neighbours, with <code>O(n · k)</code> memory. Above a few thousand
+points the sparse graph is mandatory.</p>
+<p><strong>Eigendecomposition of the Laplacian.</strong> A full
+eigendecomposition is <code>O(n³)</code>. The good news: we only need the
+bottom <code>K</code> eigenvectors, and sparse iterative solvers (Lanczos,
+ARPACK — what sklearn uses) compute these in roughly <code>O(n² · K)</code>
+for dense matrices, or <code>O(n · K · log n)</code> for sparse ones.</p>
+<p>In practice spectral clustering is limited to <code>n ≈ 10⁴</code> to
+<code>10⁵</code> points without specialised infrastructure. For larger
+datasets the field has produced <strong>Nyström-extension spectral
+clustering</strong> (approximate the eigenvectors from a small random
+sample of points), <strong>landmark spectral clustering</strong> (cluster
+a small set of &ldquo;landmarks&rdquo; then propagate), and <strong>anchor-graph
+spectral clustering</strong> — all of which trade exactness for
+scalability.</p>
+<p>The model itself is not parametric. There is no <code>predict</code>
+method for new points (the same limitation t-SNE has). You can
+extend a fitted clustering to new data via Nyström
+approximation or by 1-NN against the original training points;
+both are workarounds rather than first-class support.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>Spectral methods are the mathematical foundation of a large
+chunk of modern ML:</p>
+<p><strong>Image segmentation.</strong> Shi &amp; Malik&rsquo;s 2000 <em>Normalized Cuts
+and Image Segmentation</em> paper kicked off the modern wave of
+spectral methods in computer vision. Treat each pixel as a
+node, edge weights from colour/texture similarity, partition
+the resulting graph with normalised cuts. Pre-deep-learning
+image segmentation pipelines were heavily spectral; modern
+SAM-style segmenters use neural networks, but graph-cut
+post-processing of their outputs often still uses spectral
+ideas.</p>
+<p><strong>Community detection in social networks.</strong> Spectral clustering
+on the adjacency matrix of a social network finds
+communities — groups of users with dense internal connections
+and sparse external ones. The Newman-Girvan modularity and the
+many spectral-based community-detection algorithms that
+followed (spectral modularity maximisation, Bethe Hessian
+methods) all live in this neighbourhood.</p>
+<p><strong>Manifold learning.</strong> Laplacian Eigenmaps (Belkin &amp; Niyogi,
+2003), Locally Linear Embedding, Diffusion Maps, and UMAP all
+use Laplacian-eigenvector machinery. UMAP&rsquo;s <em>spectral init</em>
+step is literally the spectral-clustering eigenvector
+computation; we hit it in Part 5 without unpacking the
+mathematics, which we have now done here.</p>
+<p><strong>Single-cell RNA-seq.</strong> Some single-cell pipelines use
+spectral clustering on a k-NN graph in PCA-reduced
+gene-expression space — particularly in workflows where Louvain
+or Leiden community-detection (which is what Scanpy / Seurat
+default to) is too coarse.</p>
+<p><strong>Graph signal processing.</strong> The Laplacian eigenvectors are
+the &ldquo;Fourier basis&rdquo; for graph signals — the foundation of an
+entire field that generalises classical Fourier analysis to
+arbitrary graph structures. Graph Neural Networks build on
+exactly this machinery.</p>
+<p><strong>Initialisation and dimensionality reduction.</strong> UMAP&rsquo;s
+spectral init, the spectral-embedding step in Laplacian
+eigenmaps, and similar methods are spectral clustering
+without the final K-Means step — useful whenever you want a
+low-dimensional embedding that respects graph connectivity.</p>
+<p>The pattern: spectral clustering is rarely the headline
+algorithm in production, but the <em>Laplacian spectrum</em> it
+relies on is one of the most widely-used mathematical objects
+in unsupervised learning and graph machine learning generally.</p>
+<hr />
+<h2>When NOT to use spectral clustering</h2>
+<p>The algorithm&rsquo;s limitations are real:</p>
+<p><strong>When K-Means already works.</strong> On compact spherical clusters,
+K-Means is faster, simpler, and just as accurate. Reach for
+spectral clustering only when you suspect the clusters have
+non-trivial shapes.</p>
+<p><strong>When <code>n</code> is very large.</strong> Without approximation methods,
+spectral clustering does not scale past ~10⁴ points cleanly.
+For larger datasets use sparse k-NN graphs, Nyström
+approximations, or community-detection algorithms (Louvain,
+Leiden) on a k-NN graph instead.</p>
+<p><strong>When the affinity kernel is hard to tune.</strong> RBF bandwidth
+choice can dominate the results. If you don&rsquo;t have a principled
+way to set <code>σ</code>, the algorithm is fragile.</p>
+<p><strong>When you need to embed new points.</strong> Like t-SNE and
+hierarchical clustering, spectral clustering does not
+generalise to unseen data. For workflows that need fast
+inference on new points, train a parametric model on the
+spectral-clustering labels as a surrogate.</p>
+<p><strong>When you need probabilistic cluster assignments.</strong> Spectral
+clustering produces hard assignments. For soft probabilities
+use Gaussian Mixture Models or fuzzy variants of spectral
+clustering.</p>
+<p><strong>When the data has very different cluster sizes.</strong> The
+normalised Laplacian helps but does not fully solve this; a
+dominant cluster can still bias the embedding. Hierarchical
+clustering with average linkage is often more forgiving.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 8 of the Unsupervised Learning track is <strong>Association
+Rule Mining</strong> — the classical &ldquo;people who bought X also bought
+Y&rdquo; recipe behind market-basket analysis. Apriori and FP-Growth
+extract frequent itemsets from transaction data and turn them
+into actionable rules. It is the most domain-specific of the
+unsupervised algorithms we cover — useful for transactional /
+categorical data, less applicable to numeric vectors — but it
+is the algorithm that built recommendation systems before
+collaborative filtering took over, and it still ships in every
+serious business-analytics stack.</p>
+<p>After Association Rule Mining the Unsupervised Learning track
+wraps. The next big track — Advanced Unsupervised Learning —
+opens with DBSCAN, Gaussian Mixture Models, and friends.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/03-unsupervised-learning/07-spectral-clustering/spectral_clustering.py"><strong>spectral_clustering.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scikit-learn
+python spectral_clustering.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scikit-learn</code>. The script implements
+spectral clustering from scratch — RBF affinity, symmetric
+normalised Laplacian, eigendecomposition, K-Means on the
+row-normalised eigenvectors — and applies it to three datasets
+spanning K-Means&rsquo; failure modes: 3 Gaussian blobs (control),
+2 interleaving moons (curved manifolds), and 2 concentric
+circles (nested structure). On all three it matches the true
+labels with ARI 1.000. The K-Means baseline matches on the
+blobs and fails on the other two. The headline insight worth
+pinning to the wall: <strong>spectral clustering converts data into
+a graph, decomposes the graph&rsquo;s Laplacian, and runs K-Means
+in the eigenvector space where curved clusters become
+spherical and easy</strong>.</p>
+<hr />
+<p><em>This is Part 7 of the Unsupervised Learning track in the Algorithms in Python series. The companion script <code>spectral_clustering.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/4bddfe26f8f7">Part 6</a> covered Non-Negative Matrix Factorisation. Part 8 will look at Association Rule Mining — the market-basket-analysis algorithms behind classical recommender systems.</em></p>
