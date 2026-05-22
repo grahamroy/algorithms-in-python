@@ -1,0 +1,375 @@
+<p>For the last seven articles we have been working with numeric
+feature vectors — points in <code>d</code>-dimensional Euclidean space,
+clustered, projected, embedded, factorised, and visualised.
+Today the data type changes. Each &ldquo;data point&rdquo; is a <strong>set</strong> —
+the items in a single shopping basket, the pages a user
+visited in one session, the medical codes attached to a single
+patient visit, the genes co-expressed in one cell. The
+question is no longer &ldquo;which points are close in space?&rdquo; but
+&ldquo;which combinations of items frequently appear together, and
+which items predict the presence of others?&rdquo;</p>
+<p><strong>Association Rule Mining</strong> is the family of algorithms that
+answers those questions. Agrawal, Imielinski &amp; Swami&rsquo;s 1993
+paper <em>Mining Association Rules between Sets of Items in Large
+Databases</em> established the framework: count which itemsets
+appear frequently together in a transaction database, then
+turn the frequent itemsets into rules of the form <em>&ldquo;if a
+basket contains {milk, bread}, it probably contains {butter}&rdquo;</em>.
+The algorithm Agrawal &amp; Srikant proposed in 1994 to do this
+efficiently — <strong>Apriori</strong> — was for nearly two decades the
+default way to run market-basket analysis on retail data, and
+it is still the entry point to a whole field of pattern-mining
+algorithms (FP-Growth, ECLAT, the more modern frequent-pattern
+miners).</p>
+<p>The technique entered popular awareness through the (probably
+apocryphal) &ldquo;beer and diapers&rdquo; story: a major US retailer&rsquo;s
+data-mining team supposedly discovered that men who shopped on
+Friday evenings often bought beer and diapers together, and
+re-arranged store layouts accordingly. The story has been
+repeated, debunked, and re-told for thirty years; whether or
+not it is literally true, it is the canonical example of what
+association rule mining is for: discovering non-obvious
+co-purchase patterns that influence business decisions.</p>
+<p>This article builds Apriori from first principles. We will
+define support, confidence, and lift; walk through the
+algorithm&rsquo;s clever &ldquo;monotone downward closure&rdquo; property that
+lets it prune the exponential search space; implement it from
+scratch on a small grocery dataset; compare with the
+production-grade <code>mlxtend</code> library; and finish with where the
+algorithm fits in 2026 — narrower than it was in 1996, but
+still very much in use.</p>
+<hr />
+<h2>The setup: transactions and itemsets</h2>
+<p>A <strong>transaction database</strong> is a collection of transactions,
+where each transaction is a set of items drawn from a universe
+of possible items <code>I</code>. Example:</p>
+<pre><code>T1 = {milk, bread, butter}
+T2 = {bread, butter}
+T3 = {milk, bread, eggs}
+T4 = {bread, eggs}
+T5 = {milk, eggs}
+T6 = {bread, butter, eggs}
+T7 = {milk, bread}
+T8 = {bread, butter}
+</code></pre>
+<p>Eight transactions, four distinct items (<code>milk</code>, <code>bread</code>,
+<code>butter</code>, <code>eggs</code>). The order of items inside a transaction
+does not matter — these are sets — and quantities are
+ignored (you either bought bread or you did not; the algorithm
+does not care about <em>how much</em>).</p>
+<p>An <strong>itemset</strong> is any subset of <code>I</code>. The itemset <code>{bread,
+butter}</code> is a 2-itemset; the itemset <code>{milk, bread, eggs}</code> is
+a 3-itemset; and so on. With four items there are <code>2⁴ - 1 = 15</code>
+possible non-empty itemsets. With a realistic supermarket
+inventory (<code>|I| ≈ 50,000</code>) the number of possible itemsets is
+astronomically large — far too large to enumerate explicitly.</p>
+<p>Association rule mining works in two phases:</p>
+<ol>
+<li><strong>Find all frequent itemsets.</strong> An itemset is <em>frequent</em> if
+   it appears in at least a minimum fraction (the <strong>minimum
+   support</strong>) of transactions.</li>
+<li><strong>Generate rules.</strong> For each frequent itemset, generate
+   candidate rules of the form <code>A → B</code> (where <code>A ∪ B</code> is the
+   itemset and <code>A ∩ B = ∅</code>), and keep those with <strong>confidence</strong>
+   above a threshold.</li>
+</ol>
+<p>The first phase is the hard one. Apriori is the algorithm that
+makes it tractable.</p>
+<hr />
+<h2>Three metrics: support, confidence, lift</h2>
+<p>Three numbers characterise any rule <code>A → B</code>:</p>
+<p><strong>Support.</strong> The fraction of transactions that contain both
+<code>A</code> and <code>B</code>:</p>
+<pre><code>support(A → B) = | transactions containing A ∪ B | / N
+</code></pre>
+<p>In the eight-transaction example above:
+<code>support(bread → butter) = |{T1, T2, T6, T8}| / 8 = 0.50</code>.</p>
+<p><strong>Confidence.</strong> Among transactions that contain <code>A</code>, the
+fraction that also contain <code>B</code>:</p>
+<pre><code>confidence(A → B) = support(A ∪ B) / support(A)
+                  = P(B | A)
+</code></pre>
+<p>If <code>support(bread) = 7/8 = 0.875</code> and <code>support(bread, butter)
+= 4/8 = 0.50</code>, then <code>confidence(bread → butter) = 0.50 / 0.875
+≈ 0.57</code> — 57% of bread-buying transactions also contain butter.</p>
+<p><strong>Lift.</strong> Confidence normalised by the baseline probability of
+<code>B</code>:</p>
+<pre><code>lift(A → B) = confidence(A → B) / support(B)
+            = P(B | A) / P(B)
+</code></pre>
+<p>A lift of <code>1.0</code> means <code>A</code> provides no information about <code>B</code>
+(buying <code>A</code> does not change the probability of <code>B</code>). Lift <code>&gt;1</code>
+means <code>A</code> is a <em>positive</em> indicator of <code>B</code> (the items
+co-occur more than chance). Lift <code>&lt;1</code> means <code>A</code> is a <em>negative</em>
+indicator (the items co-occur less than chance — buying one
+makes you less likely to buy the other).</p>
+<p>In practice, sorting candidate rules by <strong>lift</strong> is usually
+what surfaces interesting findings, because high-support
+high-confidence rules involving common items (e.g.
+<code>anything → bread</code> in a supermarket where 90% of baskets
+contain bread) tend to be obvious and uninteresting. Lift
+isolates the <em>surprising</em> associations.</p>
+<hr />
+<h2>The Apriori algorithm</h2>
+<p>The brute-force way to find all frequent itemsets is to
+enumerate every subset of <code>I</code> and count its support — <code>2^|I|</code>
+candidates. For <code>|I| = 50,000</code> this is impossible.</p>
+<p>Apriori&rsquo;s key insight is the <strong>monotone downward closure
+property</strong> (the &ldquo;Apriori property&rdquo;):</p>
+<blockquote>
+<p>If an itemset is frequent, all of its subsets are also
+frequent. Equivalently, if any subset of an itemset is
+<em>infrequent</em>, the itemset itself is infrequent.</p>
+</blockquote>
+<p>This means we can build the frequent itemsets level by level
+— first all frequent singletons, then frequent pairs (only
+considering pairs of frequent singletons), then frequent
+triples (only considering combinations of frequent pairs),
+and so on. At each level we prune candidates whose subsets
+are not all known to be frequent.</p>
+<pre><code>apriori(transactions, min_support):
+    # Level 1: all single items
+    L_1 = { {i} : support({i}) ≥ min_support }
+    L = [L_1]
+    k = 2
+    while L[k - 2]:                  # while previous level non-empty
+        # Candidate generation: join L_{k-1} with itself
+        C_k = generate_candidates(L[k - 2])
+        # Prune candidates whose subsets aren't all in L_{k-1}
+        C_k = prune(C_k, L[k - 2])
+        # Count support in one pass over transactions
+        L_k = { c in C_k : support(c) ≥ min_support }
+        L.append(L_k)
+        k += 1
+    return union(L)
+</code></pre>
+<p>The candidate-generation step pairs every two <code>(k−1)</code>-itemsets
+that share <code>k−2</code> items to form a candidate <code>k</code>-itemset. The
+pruning step then removes any candidate that has any
+<code>(k−1)</code>-subset not in <code>L_{k-1}</code> — because if any such subset
+were infrequent, the candidate itself must be infrequent (by
+the Apriori property), so we can drop it without checking.</p>
+<p>The number of database passes equals the size of the largest
+frequent itemset (typically <code>≤ 5</code> in real retail data). Each
+pass scans all transactions and increments counts for the
+candidate itemsets it contains. This is the algorithm&rsquo;s main
+cost.</p>
+<p>Once we have all frequent itemsets, rule generation is
+straightforward: for every frequent itemset <code>F</code> and every
+non-empty proper subset <code>A ⊂ F</code>, the rule <code>A → F \ A</code> has
+support <code>support(F)</code> and confidence <code>support(F) / support(A)</code>.
+Keep the rules whose confidence exceeds the threshold.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script uses a small synthetic grocery dataset
+(50 transactions over 10 items — a tractable size for showing
+the algorithm in action) and runs both a from-scratch Apriori
+and <code>mlxtend</code>&rsquo;s production implementation.</p>
+<pre><code>DEMO 1 --- Apriori from scratch on a small grocery dataset
+  Transactions   : 50
+  Items          : 10
+  min_support    : 0.2  (must appear in &gt;=10 transactions)
+  Frequent itemsets discovered: 41
+  Examples (top 5 by support):
+    {bread}                     support=0.760
+    {eggs}                      support=0.580
+    {milk}                      support=0.500
+    {butter}                    support=0.480
+    {bread, butter}             support=0.460
+</code></pre>
+<pre><code>DEMO 2 --- Rule generation (min_confidence=0.6, sorted by lift)
+  antecedent       -&gt;  consequent          conf    lift
+  ---------------      --------------    ------  ------
+  {beer, bread}    -&gt;  {butter, soda}     0.667    3.03
+  {butter, soda}   -&gt;  {beer, bread}      0.909    3.03
+  {beer}           -&gt;  {chips, soda}      0.611    2.78
+  {chips, soda}    -&gt;  {beer}             1.000    2.78
+  {butter, soda}   -&gt;  {beer}             0.909    2.53
+</code></pre>
+<pre><code>DEMO 3 --- Same data, mlxtend Apriori + association_rules
+  Frequent itemsets discovered: 41   (matches from-scratch)
+  Rules with confidence &gt;= 0.6:  57   (matches from-scratch)
+  Top rule by lift: {beer, bread} -&gt; {butter, soda}  (lift = 3.03)
+</code></pre>
+<p>Three observations.</p>
+<p><strong>Apriori discovered 41 frequent itemsets out of <code>2¹⁰ - 1 =
+1023</code> possible itemsets.</strong> That is the win of the monotone
+pruning: even on a tiny dataset, the algorithm doesn&rsquo;t have
+to check most of the search space.</p>
+<p><strong>The highest-lift rules cluster around the &ldquo;snack basket&rdquo;
+pattern.</strong> People who buy <code>{chips, soda}</code> <em>always</em> buy beer in
+this dataset (confidence <code>1.000</code>), and they do so at lift
+<code>2.78</code> — meaning beer is 2.8× more common in chips+soda
+baskets than in the general population. Pull these rules
+together and the algorithm has rediscovered the &ldquo;people who
+buy snacks for the game also buy beer&rdquo; co-purchase pattern,
+without any prior knowledge of what beer or chips are.</p>
+<p><strong>The from-scratch implementation matches mlxtend exactly on
+both itemset count (41) and rule count (57).</strong> Apriori is one
+of the few ML algorithms where reproducibility across
+implementations is essentially guaranteed — given the same
+data, support threshold, and confidence threshold, all
+correct implementations return the same itemsets and rules.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>The dominant costs:</p>
+<p><strong>Per-pass scan.</strong> Each pass through the transaction database
+costs <code>O(N · |C_k| · k)</code> — for each of <code>N</code> transactions, check
+which of <code>|C_k|</code> candidate <code>k</code>-itemsets it contains, with each
+check costing <code>O(k)</code>. This is the per-iteration cost.</p>
+<p><strong>Number of passes.</strong> Equals the size of the largest frequent
+itemset — typically small (<code>≤ 5</code>) on real retail data, can be
+larger on dense biomedical or web-log data.</p>
+<p><strong>Candidate generation.</strong> <code>O(|L_{k-1}|² · k)</code> for the join and
+prune steps. Subset enumeration of each candidate requires
+checking <code>O(k)</code> subsets against the previous level.</p>
+<p><strong>Memory.</strong> <code>O(|L|)</code> for storing all frequent itemsets across
+levels. The candidate sets <code>C_k</code> and <code>L_k</code> typically fit
+comfortably in memory even on million-transaction databases.</p>
+<p><strong>The pathological worst case.</strong> If <code>min_support</code> is set very
+low (or the data is very dense), the number of frequent
+itemsets can grow exponentially in <code>|I|</code> — Apriori then
+generates massive candidate sets and slows to a crawl. The
+practical answer is to raise <code>min_support</code> until the itemset
+count is tractable, or switch to <strong>FP-Growth</strong> — a tree-based
+algorithm that avoids candidate generation entirely and is
+typically 5-10× faster than Apriori on dense data.</p>
+<p>For very large transaction databases (Walmart-scale retail,
+clickstream logs from a major web property), the modern
+recommendations are:</p>
+<ul>
+<li><strong>FP-Growth</strong> — no candidate generation, two database
+  passes total, much faster than Apriori on dense data.</li>
+<li><strong>ECLAT</strong> — vertical data layout (each item maps to the set
+  of transactions containing it); fast on sparse data.</li>
+<li><strong>Top-K closed pattern miners</strong> — instead of enumerating
+  all frequent itemsets, find the top-K &ldquo;closed&rdquo; itemsets
+  (those that are not subsumed by a larger itemset with the
+  same support).</li>
+</ul>
+<p>In <code>mlxtend</code> and other libraries, FP-Growth is the default when
+the candidate generation in Apriori becomes the bottleneck.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>Association rule mining is the algorithm that built
+recommendation systems before collaborative filtering took
+over. It is also still in production wherever pattern-mining
+matters:</p>
+<p><strong>Market-basket analysis.</strong> The original use case and still
+the most common. Retailers, supermarkets, e-commerce — all
+run Apriori or FP-Growth on their transaction logs to
+discover co-purchase patterns. Outputs feed product placement,
+promotion design, basket-builder UI components, and
+cross-sell recommendations.</p>
+<p><strong>Click-stream analysis.</strong> Web analytics platforms use
+association rule mining to find common click sequences and
+page-co-visits. &ldquo;Users who viewed <code>/pricing</code> and <code>/docs</code>
+often go to <code>/signup</code>&rdquo; is a rule with practical product
+implications.</p>
+<p><strong>Medical billing fraud detection.</strong> A patient&rsquo;s billing record
+is a set of procedure codes; rules of the form <em>&ldquo;if codes A
+and B appear together, code C usually follows&rdquo;</em> let auditors
+spot bills that violate the expected co-occurrence patterns.</p>
+<p><strong>Inventory and supply chain.</strong> Co-occurrence rules in
+purchase orders identify products that should be stocked
+together, reducing stock-outs of complementary items.</p>
+<p><strong>Bioinformatics.</strong> Gene-expression data, where each cell is
+a &ldquo;transaction&rdquo; of expressed genes; association rules surface
+co-regulated gene modules. Drug-discovery pipelines use
+similar techniques on chemical-feature sets.</p>
+<p><strong>Recommender systems.</strong> Modern recommender systems (matrix
+factorisation, neural collaborative filtering, sequence
+models) have largely displaced association rules as the
+primary recommendation engine — but Apriori-style co-occurrence
+mining is often the <strong>baseline</strong> against which more
+sophisticated methods are compared, and remains the right
+choice when the data is small, the interpretability bar is
+high, or the recommendation logic must be auditable.</p>
+<p><strong>Educational data mining.</strong> Student-course enrolment data,
+quiz-answer co-occurrence patterns, learning-pathway
+discovery — all natural fits for association rule mining.</p>
+<p>The pattern: ARM is the right tool when you have <strong>set-valued
+transactions</strong> and want <strong>interpretable co-occurrence rules</strong>.
+For continuous embeddings, dense feature vectors, or any
+non-set data, reach for something else.</p>
+<hr />
+<h2>When NOT to use association rule mining</h2>
+<p>The technique has well-defined limits:</p>
+<p><strong>When the data isn&rsquo;t set-valued.</strong> ARM is designed for
+unordered sets of categorical items. For sequences (where
+order matters), use <strong>sequential pattern mining</strong> (PrefixSpan,
+SPADE). For continuous features, the algorithm does not
+apply.</p>
+<p><strong>When you need ranking or personalisation.</strong> Association
+rules are global — they tell you &ldquo;in general, A predicts B&rdquo;.
+For per-user recommendations based on personal preferences,
+collaborative filtering or matrix factorisation is the right
+tool.</p>
+<p><strong>When the data is too dense or the minimum support too
+low.</strong> Apriori&rsquo;s exponential blow-up on dense data is well
+known. Switch to FP-Growth, or raise the support threshold
+until the itemset count is manageable.</p>
+<p><strong>When the rare interesting rules are below the support
+threshold.</strong> ARM can only find rules involving items that
+appear frequently enough together. The &ldquo;beer and diapers&rdquo;
+combination would not have been found unless the support
+threshold was tuned low enough to include it — and tuning
+that low typically explodes the candidate count. <strong>Top-K
+mining</strong> or <strong>rare-rule mining</strong> algorithms specifically
+target these.</p>
+<p><strong>When the items have known hierarchy that matters.</strong>
+Standard ARM treats items as opaque labels. If your items
+have a taxonomy (e.g. specific products under categories),
+<strong>generalised association rule mining</strong> uses the hierarchy
+explicitly.</p>
+<p><strong>When statistical significance matters.</strong> High-confidence
+rules with low support are often coincidences. The
+statistical-significance tests for association rules
+(chi-squared, Fisher&rsquo;s exact test, false-discovery-rate
+corrections) are not built into the standard algorithm —
+treat the output as a candidate list, not as proven
+relationships.</p>
+<hr />
+<h2>What comes next</h2>
+<p>This article closes out the <strong>Unsupervised Learning</strong> track
+(8 articles). Track 04 — <strong>Advanced Unsupervised Learning</strong> —
+opens with <strong>DBSCAN</strong>, the density-based clustering algorithm
+that identifies clusters by density-connected regions and
+handles arbitrary shapes natively (without spectral
+clustering&rsquo;s eigenvector machinery). After DBSCAN: Gaussian
+Mixture Models, Autoencoders, Anomaly Detection, and Latent
+Dirichlet Allocation.</p>
+<p>The unsupervised toolkit we built across this track —
+K-Means, hierarchical clustering, PCA, t-SNE, UMAP, NMF,
+spectral clustering, and association rule mining — covers
+the standard repertoire for discovering structure in
+unlabelled data. The advanced track sharpens those tools
+and adds the probabilistic, density-based, and deep-learning
+approaches that handle the cases the basic toolkit struggles
+with.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/03-unsupervised-learning/08-association-rule-mining/apriori.py"><strong>apriori.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy mlxtend pandas
+python apriori.py
+</code></pre>
+<p>It needs <code>numpy</code>, <code>pandas</code>, and <code>mlxtend</code> (the standard
+Python library for association rule mining; not part of
+scikit-learn). The script implements Apriori from scratch
+with level-by-level frequent-itemset generation and the
+Apriori-property pruning, applies it to a 50-transaction
+10-item grocery dataset, generates rules sorted by lift, and
+compares against <code>mlxtend</code>&rsquo;s production implementation (the
+two find identical itemsets and rules). The headline insight
+worth pinning to the wall: <strong>Apriori turns the exponential
+search for frequent itemsets into a level-by-level
+enumeration by exploiting the monotone-downward-closure
+property — if an itemset is infrequent, all its supersets
+are too — and association rules sorted by lift surface the
+non-obvious co-occurrence patterns that drive market-basket
+analysis to this day</strong>.</p>
+<hr />
+<p><em>This is Part 8 of the Unsupervised Learning track in the Algorithms in Python series, and the final article in that track. The companion script <code>apriori.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/a205e1fc8d0e">Part 7</a> covered Spectral Clustering. The next track — Advanced Unsupervised Learning — opens with DBSCAN, the density-based clustering algorithm that handles arbitrary cluster shapes natively.</em></p>

@@ -53,8 +53,8 @@ clear explanations and Python implementations.
 | 4 | t-SNE | ✅ |
 | 5 | UMAP | ✅ |
 | 6 | Non-negative Matrix Factorisation (NMF) | ✅ |
-| 7 | Spectral Clustering | ⬜ |
-| 8 | Association Rule Mining | ⬜ |
+| 7 | Spectral Clustering | ✅ |
+| 8 | Association Rule Mining | ✅ |
 
 ### 04 — Advanced Unsupervised Learning
 | # | Algorithm | Status |
