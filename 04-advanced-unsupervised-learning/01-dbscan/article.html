@@ -1,0 +1,365 @@
+<p>The basic Unsupervised Learning track gave us seven algorithms
+for finding structure in unlabelled data — K-Means and
+hierarchical clustering for compact blobs, PCA / t-SNE / UMAP
+for dimensionality reduction, NMF for parts-based decomposition,
+spectral clustering for arbitrary shapes, association rule
+mining for transactional sets. Six of the seven share one
+quiet assumption: <em>you tell the algorithm how many clusters to
+look for</em>. K-Means demands <code>K</code> up front; hierarchical
+clustering builds a dendrogram you cut at a chosen height;
+spectral and the matrix-factorisation methods all need an
+explicit number of components. Only association rule mining
+sidesteps the question — and it does so by abandoning
+clustering altogether.</p>
+<p>Today we open the Advanced Unsupervised Learning track with the
+algorithm that <em>finally</em> takes &ldquo;how many clusters?&rdquo; off the
+hyperparameter list. <strong>DBSCAN</strong> (Density-Based Spatial
+Clustering of Applications with Noise; Ester, Kriegel, Sander
+&amp; Xu, 1996) discovers clusters by <em>density</em> rather than count.
+A cluster is wherever the data is locally dense; the
+boundaries between clusters are wherever the data thins out;
+and the points scattered in between — the ones that don&rsquo;t
+belong to any dense region — are simply labelled <strong>noise</strong>
+rather than forced into a cluster they don&rsquo;t fit. The number of
+clusters falls out of the data instead of being declared.</p>
+<p>DBSCAN is the workhorse of geospatial clustering (where you
+genuinely don&rsquo;t know how many &ldquo;hotspots&rdquo; your data has), the
+foundation of one of the most-used outlier-detection
+strategies in production ML (DBSCAN&rsquo;s noise points are <em>exactly</em>
+the anomalies), and the parent of HDBSCAN — its modern
+successor that has displaced t-SNE-with-K-Means-on-top as the
+default analysis pipeline for single-cell RNA-seq and many
+modern embedding-clustering workflows.</p>
+<p>This article builds DBSCAN from first principles. We will
+define core, border, and noise points; walk through the
+density-connectedness relation that defines DBSCAN clusters;
+implement the algorithm from scratch in numpy; run it on the
+two-moons dataset that K-Means famously fails on (this time
+with added Gaussian noise to show DBSCAN&rsquo;s noise-detection in
+action); compare with scikit-learn&rsquo;s <code>DBSCAN</code>; and finish with
+the eps-and-min_samples tuning question, the algorithm&rsquo;s
+limits, and a quick look at HDBSCAN as the right modern
+default.</p>
+<hr />
+<h2>The core idea: density defines clusters</h2>
+<p>K-Means&rsquo; implicit definition of a cluster is <em>&ldquo;the set of
+points closest to a particular centroid&rdquo;</em>. Hierarchical
+clustering&rsquo;s is <em>&ldquo;a connected subtree of merges below a chosen
+height&rdquo;</em>. Spectral clustering&rsquo;s is <em>&ldquo;a connected component in
+a similarity graph&rdquo;</em>. All three are <em>partition-based</em> — every
+point ends up in some cluster, no exceptions.</p>
+<p>DBSCAN&rsquo;s definition is <em>density-based</em> — <em>&ldquo;a connected region
+where every point has at least a minimum number of other
+points within a small radius&rdquo;</em>. Two consequences fall out:</p>
+<ul>
+<li><strong>A cluster has no fixed size or shape.</strong> It is whatever
+  shape the dense region happens to take. Curved manifolds,
+  elongated cigars, nested rings — DBSCAN handles all of them
+  as long as the density inside the cluster is consistent and
+  the density between clusters drops noticeably.</li>
+<li><strong>Some points belong to no cluster at all.</strong> Points in
+  sparse regions — outliers, far from any dense neighbourhood
+  — are simply labelled <em>noise</em>. This is the cleanest treatment
+  of outliers in any clustering algorithm we have built so
+  far.</li>
+</ul>
+<p>Two parameters control the density definition:</p>
+<ul>
+<li><strong><code>eps</code></strong> — the neighbourhood radius. Two points are
+  &ldquo;neighbours&rdquo; if they are within Euclidean distance <code>eps</code> of
+  each other.</li>
+<li><strong><code>min_samples</code></strong> — the density threshold. A point with at
+  least <code>min_samples</code> neighbours within <code>eps</code> is in a dense
+  region.</li>
+</ul>
+<p>Together they define what &ldquo;dense&rdquo; means. The algorithm has no
+opinion on how many clusters that produces; it just finds
+whatever satisfies the density rule.</p>
+<hr />
+<h2>Three categories of point</h2>
+<p>DBSCAN classifies every training point as one of three things:</p>
+<p><strong>Core point.</strong> A point with at least <code>min_samples</code> other
+points (including itself) within <code>eps</code>. Core points sit
+inside dense regions.</p>
+<p><strong>Border point.</strong> Not a core point, but within <code>eps</code> of some
+core point. Border points are on the edge of a cluster —
+attached to the dense interior but not themselves dense.</p>
+<p><strong>Noise point.</strong> Neither core nor border. No core points
+within <code>eps</code>. These are the outliers.</p>
+<p>Two points <code>p</code> and <code>q</code> are <strong>density-connected</strong> if there is a
+chain of core points <code>p = p_0, p_1, ..., p_k = q</code> where every
+consecutive pair <code>(p_i, p_{i+1})</code> is within <code>eps</code>. A <strong>DBSCAN
+cluster</strong> is a maximal set of density-connected points. Every
+core point belongs to exactly one cluster; every border point
+attaches to one of its neighbouring clusters (which one is
+implementation-defined when borders touch multiple cores);
+every noise point belongs to no cluster.</p>
+<p>The clusters fall out of these definitions. There is no
+explicit count; the algorithm visits every point exactly once
+and discovers however many clusters the density rule supports.</p>
+<hr />
+<h2>The algorithm</h2>
+<p>In pseudocode:</p>
+<pre><code>dbscan(X, eps, min_samples):
+    label = array of &quot;unvisited&quot; for every point
+    cluster_id = 0
+    for p in X:
+        if label[p] != &quot;unvisited&quot;:
+            continue
+        neighbours = points within eps of p
+        if len(neighbours) &lt; min_samples:
+            label[p] = &quot;noise&quot;
+            continue
+        # p is a core point; start a new cluster
+        cluster_id += 1
+        label[p] = cluster_id
+        seeds = neighbours - {p}
+        while seeds:
+            q = seeds.pop()
+            if label[q] == &quot;noise&quot;:
+                # Border point: attach to this cluster
+                label[q] = cluster_id
+            if label[q] != &quot;unvisited&quot;:
+                continue
+            label[q] = cluster_id
+            q_neighbours = points within eps of q
+            if len(q_neighbours) &gt;= min_samples:
+                # q is also a core point; expand the seed set
+                seeds.update(q_neighbours)
+    return label
+</code></pre>
+<p>The outer loop visits every point. The inner <code>while</code> loop
+<em>expands</em> each cluster by chasing density-connectedness — when
+a new core point is added, all of its neighbours become
+candidates for the same cluster too. The recursion (here
+implemented as a worklist of seeds) is what gives DBSCAN its
+ability to follow arbitrary cluster shapes through feature
+space.</p>
+<p>The whole algorithm is a single pass with neighbourhood
+queries. Done naively, computing &ldquo;points within <code>eps</code>&rdquo; for
+every query is <code>O(n)</code> and the whole algorithm is <code>O(n²)</code>.
+Done with a spatial index (KD-tree or ball tree), each query
+drops to <code>O(log n)</code> and the algorithm becomes <code>O(n log n)</code> —
+which is what sklearn does by default.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script generates the two-moons dataset (the
+classical curved-cluster benchmark from Part 2 of the basic
+track) plus a handful of scattered noise points, runs DBSCAN
+on it, and compares with K-Means on the same data.</p>
+<pre><code>DEMO 1 --- DBSCAN from scratch on moons + noise
+  Data shape : 320 points, 2 features
+            (300 moons + 20 uniform-random noise points)
+  eps          : 0.2
+  min_samples  : 5
+  Clusters     : 2
+  Noise points : 14
+  ARI vs true labels : 0.961
+</code></pre>
+<pre><code>DEMO 2 --- Same data, scikit-learn DBSCAN
+  Clusters     : 2
+  Noise points : 14
+  ARI vs true labels : 0.961
+  Agreement (ARI) with from-scratch DBSCAN : 1.000
+</code></pre>
+<pre><code>DEMO 3 --- K-Means on the same data (for comparison)
+  K            : 2 (forced)
+  Noise points : 0 (K-Means cannot mark noise)
+  ARI vs true labels : 0.205
+</code></pre>
+<p>Three observations.</p>
+<p><strong>DBSCAN found exactly 2 clusters without being told.</strong> The
+algorithm has no <code>K</code> parameter — it discovered the structure
+on its own and labelled 14 of the 20 injected random points as
+noise (the other 6 happened to land close enough to a moon to
+be absorbed as border points). The ARI against the true
+labels — treating noise as its own &ldquo;cluster&rdquo; — is 0.961, which
+is essentially perfect given that noise points have arbitrary
+true labels from the dataset generator.</p>
+<p><strong>The from-scratch and sklearn implementations agree
+perfectly.</strong> ARI 1.000 between them on every test. DBSCAN is
+deterministic given the input data and parameters (no random
+initialisation), so two correct implementations must produce
+identical clusterings up to label permutation. Sklearn&rsquo;s
+implementation is just faster.</p>
+<p><strong>K-Means gets ARI 0.205.</strong> As in Part 1 of the basic track,
+K-Means draws a straight bisector through the moons and ends
+up with two clusters that have no relationship to the true
+labels. Worse, it has to assign every point to one of those
+clusters — including the 20 noise points it should have
+flagged. This is the canonical &ldquo;DBSCAN handles outliers,
+K-Means doesn&rsquo;t&rdquo; demonstration.</p>
+<hr />
+<h2>The hard part: picking eps and min_samples</h2>
+<p>DBSCAN&rsquo;s two parameters are easy to describe and hard to set.
+<code>min_samples</code> is the more forgiving one — the rule of thumb
+is <code>min_samples = 2 · d</code> for <code>d</code>-dimensional data (so 4 in 2D,
+6 in 3D), increased modestly for noisy data. <code>eps</code> is much
+harder. Set it too small and every point becomes noise
+(everyone is isolated). Set it too large and every point ends
+up in one giant cluster (everyone is connected).</p>
+<p>The standard tool for picking <code>eps</code> is the <strong>k-distance plot</strong>:</p>
+<ol>
+<li>For each point, compute the distance to its <code>k</code>-th nearest
+   neighbour (where <code>k = min_samples - 1</code>).</li>
+<li>Sort those distances ascending.</li>
+<li>Plot the sorted distances.</li>
+</ol>
+<p>The plot typically shows a long flat region (most points are
+close to their neighbours — these are inside dense clusters)
+followed by a sharp &ldquo;elbow&rdquo; where the distances begin to
+climb steeply (these are points on the boundary between dense
+and sparse regions). Set <code>eps</code> to the distance at the elbow.</p>
+<p>In practice this gives a reasonable starting <code>eps</code> that needs
+some tuning. For datasets where clusters have <em>different
+densities</em>, no single <code>eps</code> will work for all of them — which
+is why HDBSCAN was invented.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>DBSCAN&rsquo;s cost is dominated by neighbourhood queries:</p>
+<p><strong>Naive implementation.</strong> Computing the distance from every
+point to every other point gives <code>O(n²)</code> queries each
+costing <code>O(d)</code>, for <code>O(n² · d)</code> total. The memory cost is
+<code>O(n²)</code> for the full distance matrix.</p>
+<p><strong>With spatial index.</strong> A KD-tree (low dimensions, <code>d ≲ 20</code>)
+or ball tree (higher dimensions) lets each &ldquo;points within
+<code>eps</code>&rdquo; query run in <code>O(log n)</code> rather than <code>O(n)</code>. The total
+cost drops to <code>O(n · log n · d)</code>. Sklearn uses this by
+default.</p>
+<p><strong>Memory</strong> is <code>O(n)</code> for the labels and <code>O(n · k)</code> for the
+spatial index (with <code>k</code> = average neighbours per point).
+Dramatically more scalable than spectral clustering or
+hierarchical clustering.</p>
+<p><strong>Practical limit</strong> depends on dimensionality. In 2D or 3D
+DBSCAN scales comfortably to millions of points. In high
+dimensions (<code>d &gt; 50</code>) the <em>curse of dimensionality</em> kicks in —
+all points end up roughly equidistant, and the density
+estimate based on <code>eps</code> becomes meaningless. For
+high-dimensional data, run dimensionality reduction (PCA, UMAP)
+first, then cluster the projection.</p>
+<p>DBSCAN has no <code>predict</code> for new points — it is non-parametric.
+You can extend by 1-NN against the original training points
+(assign a new point to the cluster of its nearest training
+neighbour, treating it as noise if no training point is within
+<code>eps</code>), but this is post-hoc, not part of the algorithm.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>DBSCAN is the right tool whenever clusters and outliers matter
+together:</p>
+<p><strong>Geospatial clustering.</strong> GPS pings, social-media check-ins,
+traffic incident reports, retail-customer locations — all
+naturally clustered by density, with many isolated points
+that don&rsquo;t belong to any &ldquo;hotspot&rdquo;. DBSCAN&rsquo;s density model
+matches the data; you don&rsquo;t have to know how many hotspots
+exist in advance. Production location-analytics pipelines at
+companies from Uber to Foursquare use DBSCAN-family
+algorithms heavily.</p>
+<p><strong>Anomaly and fraud detection.</strong> The noise points from a
+DBSCAN run are <em>literally</em> the outliers — observations that
+don&rsquo;t fit the dense patterns. Many anomaly-detection systems
+build on top of this exact idea, sometimes with HDBSCAN or
+LOF (Local Outlier Factor) for refinement. DBSCAN-as-anomaly
+is a strong baseline in monitoring, network intrusion
+detection, and credit-card fraud.</p>
+<p><strong>Image segmentation.</strong> Treat each pixel as a point in
+position+colour space, cluster with DBSCAN, get segments of
+similar contiguous pixels — a classical segmentation approach
+that pre-dates SAM-style deep models but still works well on
+medical imaging and microscopy where compute budgets are
+tight.</p>
+<p><strong>Astronomy and physics.</strong> Galaxy clustering, particle-shower
+analysis in collider experiments — domains where the number
+of clusters is genuinely unknown and where outliers are
+either interesting in themselves or need to be removed before
+downstream analysis.</p>
+<p><strong>Single-cell biology (via HDBSCAN).</strong> Modern single-cell
+RNA-seq pipelines often cluster cell embeddings with HDBSCAN
+rather than with K-Means or Louvain — particularly when cell
+types vary in abundance and density. The Berkeley-developed
+<code>hdbscan</code> library, combined with UMAP for the embedding, is a
+standard pipeline.</p>
+<p><strong>As a noise filter.</strong> Run DBSCAN, throw away the noise
+points, then run your &ldquo;real&rdquo; clustering algorithm on what is
+left. A surprisingly effective preprocessing pattern when
+your data has a lot of stray points that confuse
+compactness-based algorithms.</p>
+<p>The pattern: DBSCAN is the right answer when (a) you don&rsquo;t
+know how many clusters there are, (b) some points genuinely
+don&rsquo;t belong to any cluster, and (c) the density is
+reasonably consistent within clusters. Where any of those
+fail, the next sections discuss alternatives.</p>
+<hr />
+<h2>When NOT to use DBSCAN</h2>
+<p>DBSCAN&rsquo;s weaknesses are the flip side of its assumptions:</p>
+<p><strong>When clusters have very different densities.</strong> A single
+global <code>eps</code> cannot accommodate both a dense cluster and a
+sparse one. You&rsquo;ll either lose the sparse cluster (everyone
+becomes noise) or merge dense clusters with their sparse
+neighbours. <strong>HDBSCAN</strong> (McInnes &amp; Healy, 2017) solves this
+by treating density at multiple scales simultaneously — the
+modern recommendation when density varies.</p>
+<p><strong>In high dimensions.</strong> Above ~50 dimensions, Euclidean
+distances stop discriminating between near and far points
+(the curse of dimensionality), and DBSCAN&rsquo;s density model
+breaks. Run PCA or UMAP first, then DBSCAN on the projection.</p>
+<p><strong>When you need a fixed number of clusters.</strong> If your
+downstream pipeline needs <em>exactly</em> <code>K</code> clusters, DBSCAN
+might give you 1, 3, or 7 depending on the data — and there&rsquo;s
+no parameter that forces a specific count. Use K-Means or
+spectral clustering instead.</p>
+<p><strong>On very large datasets without an efficient spatial
+index.</strong> The default sklearn implementation uses a ball tree
+which scales reasonably, but for truly huge datasets
+(<code>n &gt; 10⁶</code>) you may want approximate-nearest-neighbour
+acceleration or a streaming variant.</p>
+<p><strong>When you cannot tolerate noise points.</strong> Some applications
+require <em>every</em> point to be classified into some group. If
+that&rsquo;s you, K-Means or Gaussian Mixture Models are better
+matches; alternatively, post-process DBSCAN noise points by
+1-NN assignment to the nearest cluster.</p>
+<p><strong>When <code>eps</code> is genuinely hard to set.</strong> If your domain has
+no natural distance scale and the k-distance plot has no
+clear elbow, DBSCAN&rsquo;s sensitivity to <code>eps</code> becomes a
+liability. HDBSCAN removes the <code>eps</code> parameter entirely;
+consider it.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 2 of the Advanced Unsupervised Learning track is
+<strong>Gaussian Mixture Models (GMMs)</strong> — a <em>probabilistic</em>
+clustering algorithm where each cluster is modelled as a
+multivariate Gaussian distribution, and every point gets a
+<em>soft</em> assignment (probabilities of belonging to each cluster
+rather than a single hard label). GMMs are the natural
+extension of K-Means when you need uncertainty estimates,
+elliptical cluster shapes, or a proper probabilistic
+framework — and they introduce the <strong>EM (Expectation–Maximisation)
+algorithm</strong> that underlies a wide range of later methods.</p>
+<p>After GMMs the track turns to <strong>autoencoders</strong>
+(neural-network-based dimensionality reduction and anomaly
+detection), <strong>anomaly detection</strong> as a topic in its own
+right, and <strong>Latent Dirichlet Allocation</strong> for probabilistic
+topic modelling.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/04-advanced-unsupervised-learning/01-dbscan/dbscan.py"><strong>dbscan.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scikit-learn
+python dbscan.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scikit-learn</code>. The script implements
+DBSCAN from scratch with the standard core/border/noise
+classification and density-connectedness expansion, fits it
+to the two-moons dataset with added uniform-random noise,
+compares against scikit-learn&rsquo;s <code>DBSCAN</code> (perfect agreement,
+ARI 1.000 between them), and shows the K-Means baseline on
+the same data for contrast (ARI 0.354 because the straight
+bisector mangles both moons and absorbs the noise points). The
+headline insight worth pinning to the wall: <strong>DBSCAN defines
+clusters by density rather than centroids, discovers the
+number of clusters from the data instead of demanding it as a
+parameter, and treats outliers as a first-class concept rather
+than forcing every point into some cluster</strong>.</p>
+<hr />
+<p><em>This is Part 1 of the Advanced Unsupervised Learning track in the Algorithms in Python series. The companion script <code>dbscan.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. The previous article (the final one in the basic Unsupervised Learning track) covered Association Rule Mining. Part 2 of this track will look at Gaussian Mixture Models — probabilistic clustering via Expectation–Maximisation.</em></p>

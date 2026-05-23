@@ -59,7 +59,7 @@ clear explanations and Python implementations.
 ### 04 — Advanced Unsupervised Learning
 | # | Algorithm | Status |
 |---|-----------|--------|
-| 1 | DBSCAN | ⬜ |
+| 1 | DBSCAN | ✅ |
 | 2 | Gaussian Mixture Models | ⬜ |
 | 3 | Autoencoders | ⬜ |
 | 4 | Anomaly Detection | ⬜ |
