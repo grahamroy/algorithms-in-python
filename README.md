@@ -61,9 +61,9 @@ clear explanations and Python implementations.
 |---|-----------|--------|
 | 1 | DBSCAN | ✅ |
 | 2 | Gaussian Mixture Models | ✅ |
-| 3 | Autoencoders | ⬜ |
-| 4 | Anomaly Detection | ⬜ |
-| 5 | Latent Dirichlet Allocation (LDA) | ⬜ |
+| 3 | Autoencoders | ✅ |
+| 4 | Anomaly Detection | ✅ |
+| 5 | Latent Dirichlet Allocation (LDA) | ✅ |
 
 ### 05 — Bayesian, Probabilistic & Causal Methods
 | # | Algorithm | Status |

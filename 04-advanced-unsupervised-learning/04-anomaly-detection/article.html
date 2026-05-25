@@ -1,0 +1,275 @@
+<p>The first eleven articles in this series have asked the
+algorithm to <em>summarise</em> the data — find the clusters, find
+the directions of variance, reconstruct the input through a
+bottleneck. <strong>Anomaly detection</strong> asks the opposite question:
+which examples are <em>unlike</em> the rest? Which points don&rsquo;t fit
+the pattern the rest of the data describes?</p>
+<p>The problem is everywhere. Credit-card fraud: 99.95% of
+transactions are legitimate; flag the 0.05% that aren&rsquo;t.
+Manufacturing quality control: most parts are within tolerance;
+catch the defective few. Network intrusion: most packets are
+normal traffic; isolate the attack. Medical screening: most
+images are healthy; surface the rare positive. In each case
+the structure is the same — a vast majority of &ldquo;normal&rdquo;
+examples and a tiny minority of &ldquo;abnormal&rdquo; ones — and the
+labels for &ldquo;abnormal&rdquo; are either entirely missing or wildly
+imbalanced. Supervised classification is the wrong shape;
+unsupervised anomaly detection is the right one.</p>
+<p>This article is a <em>survey</em> rather than a deep dive on a
+single algorithm. We will walk through five distinct
+families — statistical, density-based, distance-based,
+isolation-based, and reconstruction-based — show what each
+one does, when it is the right choice, and compare them
+side-by-side on a 2-D toy problem with planted outliers.
+The deepest article-length treatment in this series is
+<strong>Isolation Forest</strong>, the algorithm most widely deployed in
+production fraud and anomaly stacks; the others get briefer
+coverage with pointers for further reading.</p>
+<hr />
+<h2>The five families</h2>
+<p>Anomaly detection algorithms differ by what they consider
+&ldquo;normal&rdquo; — and by how they score deviation from it.</p>
+<h3>Statistical methods</h3>
+<p>The simplest approach. Assume the data follows some
+distribution (typically Gaussian) and flag points that fall
+in the tails.</p>
+<ul>
+<li><strong>Z-score.</strong> <code>z_i = (x_i - μ) / σ</code>. Flag points with <code>|z| &gt; 3</code>.
+  Works for 1-D normally-distributed data; fails on
+  multi-modal or skewed distributions.</li>
+<li><strong>IQR rule</strong> (Tukey&rsquo;s fences). Flag points outside
+  <code>[Q1 - 1.5·IQR, Q3 + 1.5·IQR]</code>. More robust than z-score
+  to skewed data.</li>
+<li><strong>Mahalanobis distance.</strong> Multivariate generalisation of
+  z-score. Distance from the mean, weighted by inverse
+  covariance. Works for elliptical Gaussian data.</li>
+</ul>
+<p>These are the right tools for clean 1-D or low-d numeric
+data with simple distributions. They fail on anything
+non-Gaussian, multi-modal, or non-numeric.</p>
+<h3>Density-based methods</h3>
+<p>Estimate the density of the data; flag points where the
+density is low.</p>
+<ul>
+<li><strong>KDE thresholding.</strong> Fit a kernel density estimator on
+  the training data; new points with density below a
+  threshold are anomalies.</li>
+<li><strong>GMM likelihood.</strong> Fit a Gaussian Mixture Model
+  (Part 2 of this track); points with low likelihood
+  under the fitted mixture are anomalies. Calibrated,
+  interpretable, scales modestly.</li>
+</ul>
+<p>The big advantage of density methods: they give a
+<em>calibrated probability</em> — useful for downstream
+cost-sensitive decisions. The big disadvantage: density
+estimation in high dimensions is hard.</p>
+<h3>Distance-based methods</h3>
+<p>Score each point by how far it is from its neighbours.
+Outliers have far-away neighbours.</p>
+<ul>
+<li><strong>k-NN distance.</strong> Distance to the <code>k</code>-th nearest
+  neighbour. Simple, interpretable, the default first
+  attempt on small datasets.</li>
+<li><strong>Local Outlier Factor (LOF)</strong> (Breunig et al, 2000).
+  Compares the local density around each point to the local
+  density around its neighbours. A point is flagged if its
+  neighbourhood is much sparser than its neighbours&rsquo;
+  neighbourhoods — handles datasets with varying local
+  density that fixed-distance methods cannot.</li>
+</ul>
+<p>Distance methods scale to medium-size datasets with k-NN
+acceleration but become impractical past <code>n ≈ 10⁵</code> without
+approximation.</p>
+<h3>Isolation-based methods</h3>
+<p>Anomalies are <em>easier to isolate</em> than normal points — fewer
+random splits separate them from the rest.</p>
+<ul>
+<li><strong>Isolation Forest</strong> (Liu, Ting &amp; Zhou, 2008). Build many
+  random trees that recursively split the data; the average
+  path length to isolate each point is the anomaly score
+  (shorter = more anomalous). Sub-linear at prediction
+  time, handles high dimensions, and is the workhorse of
+  modern production anomaly detection.</li>
+<li><strong>Extended Isolation Forest</strong> (Hariri et al, 2019).
+  Random <em>hyperplanes</em> (not axis-aligned cuts) for
+  smoother decision boundaries.</li>
+</ul>
+<p>Isolation Forest is the single most-used anomaly detector
+in 2026. Fast to train, fast to score, surprisingly accurate
+across very different domains.</p>
+<h3>Reconstruction-based methods</h3>
+<p>Train a model to reconstruct normal data; anomalies are
+points the model cannot reconstruct well.</p>
+<ul>
+<li><strong>PCA reconstruction error.</strong> Project to top-K
+  components, reconstruct, compute MSE. Cheap,
+  interpretable, and the default for high-dim data with
+  linear structure.</li>
+<li><strong>Autoencoder reconstruction error.</strong> Same idea with a
+  non-linear autoencoder (Part 3 of this track). Better
+  for image / audio / sequence data where structure is
+  non-linear.</li>
+<li><strong>VAE-based anomaly scores.</strong> Use the encoded latent&rsquo;s
+  log-likelihood under a prior, or the reconstruction
+  log-likelihood under the decoder.</li>
+</ul>
+<p>Reconstruction-based methods dominate computer-vision
+anomaly detection (industrial inspection, medical imaging).</p>
+<h3>One-class methods</h3>
+<p>Train a classifier with only the &ldquo;normal&rdquo; class; everything
+outside its decision boundary is anomalous.</p>
+<ul>
+<li><strong>One-Class SVM.</strong> Find the smallest hypersphere (or
+  hyperplane, in kernel space) containing the training
+  data. Points outside it are anomalies. Sensitive to
+  hyperparameter tuning; less common in production now
+  than Isolation Forest.</li>
+</ul>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script generates 500 inlier points from a 2-D
+Gaussian mixture plus 25 planted outliers uniformly
+distributed in a larger box, and runs four anomaly detectors
+on the data — each scoring every point, then comparing the
+top-25 flagged anomalies against the ground-truth outliers.</p>
+<pre><code>DEMO --- Five anomaly detectors on synthetic data
+  Dataset       : 500 inliers (mixture of 2 Gaussians) + 25 outliers
+  Top-25 flagged points compared against true outliers
+
+  Detector                      Precision@25      AUC
+  ----------------------        ------------    -----
+  Mahalanobis distance                  0.76    0.902
+  GMM log-likelihood                    0.84    0.968
+  k-NN distance (k=5)                   0.84    0.959
+  Local Outlier Factor                  0.84    0.970
+  Isolation Forest                      0.80    0.970
+  One-Class SVM (RBF)                   0.88    0.971
+</code></pre>
+<p>Four things to pull out.</p>
+<p><strong>Five of the six methods are clustered between 0.80 and
+0.88 precision@25.</strong> They each get 20–22 of the 25
+outliers in the top 25 and a handful of false alarms. The
+missed outliers are points placed near the boundary of the
+inlier mixture — borderline by construction. No detector
+gets every outlier; this is realistic on noisy data.</p>
+<p><strong>Mahalanobis distance is the weakest at 0.76 precision and
+0.902 AUC.</strong> It assumes a single Gaussian, but the inliers
+are a mixture of two. The &ldquo;valley&rdquo; between the two
+clusters has high Mahalanobis distance from the global
+mean even though it&rsquo;s perfectly normal under the actual
+two-Gaussian model. The right fix is to use a model that
+matches the data structure — which is exactly what GMM
+log-likelihood does (jumping to AUC 0.968).</p>
+<p><strong>AUC is the more honest comparison.</strong> Precision-at-K
+depends on the choice of K; AUC integrates over all
+thresholds. The five non-Mahalanobis methods all sit at
+AUC 0.959+ — essentially the same ranking quality, with
+the residual differences down to where the borderline
+outliers land.</p>
+<p><strong>There is no single winner.</strong> On this 2-D Gaussian-mixture
+dataset, OCSVM happens to top the precision leaderboard
+but the ranking is fragile across re-seeds. On a high-
+dimensional dataset, k-NN becomes unreliable (curse of
+dimensionality) and Isolation Forest takes over. On image /
+audio data, autoencoder reconstruction MSE wins. Match the
+algorithm to the data structure.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>The five families have very different cost profiles:</p>
+<ul>
+<li><strong>Statistical methods</strong> are <code>O(n · d)</code> to fit, <code>O(d)</code> per
+  query. Essentially free.</li>
+<li><strong>GMM density</strong> is <code>O(I · n · K · d²)</code> to fit, <code>O(K · d²)</code>
+  per query — moderate cost, well-defined.</li>
+<li><strong>k-NN distance</strong> is <code>O(n · d)</code> per query with brute
+  force, <code>O(log n · d)</code> with k-d trees in low dimensions,
+  approximate-NN methods for high dimensions.</li>
+<li><strong>LOF</strong> is <code>O(n² · d)</code> for the all-pairs distance
+  computation — the most expensive of the family. Doesn&rsquo;t
+  scale to large <code>n</code> without sub-sampling or approximation.</li>
+<li><strong>Isolation Forest</strong> is <code>O(n · log n)</code> per tree, with
+  the random-tree construction allowing sub-linear
+  prediction at scale.</li>
+<li><strong>PCA reconstruction</strong> is the cost of PCA plus a
+  single matrix multiply per query.</li>
+</ul>
+<p>For a million-point production deployment, Isolation
+Forest is almost always the right choice. For
+small-to-medium curated data where interpretability matters,
+GMM or LOF win.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p><strong>Fraud detection.</strong> Credit-card transactions, account
+takeover, money laundering — typically a stacked pipeline:
+Isolation Forest for fast cheap filtering, then a deeper
+model (gradient-boosted trees or graph neural networks) on
+the suspicious subset.</p>
+<p><strong>Network intrusion detection.</strong> Traffic logs scored by
+distance-based or density-based methods; anomalies
+investigated further.</p>
+<p><strong>Manufacturing quality control.</strong> Image-based defect
+detection via autoencoder reconstruction MSE; the
+&ldquo;AnomaLib&rdquo; library (Intel) is the standard open-source
+implementation.</p>
+<p><strong>Medical imaging.</strong> Train an autoencoder or VAE on healthy
+scans; high reconstruction error on a new scan flags
+pathology.</p>
+<p><strong>Time-series anomalies.</strong> Forecast next-value with an
+ARIMA / Prophet / LSTM; large prediction error = anomaly.
+Underlies most application-monitoring tools (Datadog,
+New Relic).</p>
+<p><strong>Drug safety / pharmacovigilance.</strong> Adverse-event reports
+clustered with anomaly methods to surface unusual
+patterns.</p>
+<p><strong>Outlier detection in scientific data.</strong> Sensor errors,
+mislabelled examples, contamination — anomaly detection
+runs before serious analysis on essentially any real
+dataset.</p>
+<hr />
+<h2>When NOT to use unsupervised anomaly detection</h2>
+<p><strong>When you have labels for some anomalies.</strong> Switch to
+supervised classification with class-imbalance handling
+(SMOTE, class weighting, calibrated thresholds). The label
+signal is usually stronger than any unsupervised score.</p>
+<p><strong>When you have a clear precise definition of &ldquo;anomaly&rdquo;.</strong>
+Rules-based detection is often simpler, faster, more
+auditable.</p>
+<p><strong>When the data is too small.</strong> Below ~100 points,
+distinguishing &ldquo;anomalous&rdquo; from &ldquo;tail of normal&rdquo; is
+statistically hopeless. Get more data.</p>
+<p><strong>When you cannot validate the detector&rsquo;s output.</strong> Any
+unsupervised score needs human inspection of top
+candidates to tune the threshold. Without that loop the
+detector ships <em>something</em> — but you have no idea if it is
+detecting the right something.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 5 of the Advanced Unsupervised Learning track is
+<strong>Latent Dirichlet Allocation (LDA)</strong> — the probabilistic
+topic model that decomposes a corpus of documents into a
+mixture of topics, with each topic itself a distribution
+over words. The mathematical machinery is closely related
+to the EM algorithm we used for GMMs in Part 2 and the
+variational methods we will encounter in the next track.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/04-advanced-unsupervised-learning/04-anomaly-detection/anomaly_detection.py"><strong>anomaly_detection.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scikit-learn
+python anomaly_detection.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scikit-learn</code>. The script generates a
+500+25 inlier/outlier dataset and runs six anomaly
+detectors — Mahalanobis, GMM log-likelihood, k-NN distance,
+Local Outlier Factor, Isolation Forest, and One-Class SVM —
+reporting precision-at-25 and AUC for each. The headline
+insight worth pinning to the wall: <strong>anomaly detection is a
+family of approaches rather than a single algorithm;
+Isolation Forest is the right default for production
+scale, LOF and density-based methods for small-medium
+interpretability-sensitive work, autoencoder reconstruction
+for image and audio data</strong>.</p>
+<hr />
+<p><em>This is Part 4 of the Advanced Unsupervised Learning track in the Algorithms in Python series. The companion script <code>anomaly_detection.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. Part 3 of this track covered Autoencoders. Part 5 will look at Latent Dirichlet Allocation — the probabilistic topic model that decomposes documents into mixtures of topics.</em></p>

@@ -1,0 +1,267 @@
+<p>In Part 3 of the basic Unsupervised track we built PCA — the
+linear dimensionality reducer that finds the axes of maximum
+variance via SVD of the centred data matrix. PCA is fast,
+deterministic, and gives you an interpretable orthonormal
+basis. Its single limitation is the word &ldquo;linear&rdquo;: it can
+only find directions that are linear combinations of the
+original features. Data that lives on a curved manifold —
+images, audio, anything with non-trivial structure — gets
+smeared rather than compressed.</p>
+<p><strong>Autoencoders</strong> are the neural-network answer. Two networks
+trained jointly: an <strong>encoder</strong> that maps the input to a
+low-dimensional <em>latent code</em>, and a <strong>decoder</strong> that maps the
+code back to a reconstruction of the input. The objective is
+to minimise the reconstruction error — the squared difference
+between the input and what comes out the other side. The
+network is forced to discover, in the latent code, whatever
+compressed representation lets the decoder rebuild the input
+most accurately.</p>
+<p>When the encoder and decoder are linear maps with a squared-
+error loss, the optimal solution is <em>exactly</em> PCA. When they
+are non-linear (typical: a few dense layers with ReLU
+activations), the autoencoder learns a non-linear compression
+that can capture curved manifolds PCA cannot. And — unlike
+t-SNE / UMAP — the encoder is a <em>parametric function</em>: once
+trained you can apply it to new data with a single forward
+pass, no re-fitting.</p>
+<p>Autoencoders are the conceptual ancestor of every modern
+self-supervised technique. Variational Autoencoders, masked
+autoencoders (the trick behind BERT-style pretraining),
+denoising autoencoders (the trick behind diffusion models),
+and the encoder half of the Transformer all live in the same
+family. This article builds the simplest version — a fully
+connected autoencoder trained on the digits dataset — and
+walks through the key variants and where they end up.</p>
+<hr />
+<h2>The architecture</h2>
+<p>An autoencoder is two networks stacked into one optimisation
+loop:</p>
+<pre><code>x  →  Encoder  →  z  →  Decoder  →  x_hat
+                  ↑                   ↓
+                  |                   |
+                  +--- minimise ‖x - x_hat‖² ---+
+</code></pre>
+<p><code>x</code> is the input (e.g. a 64-dimensional flattened image).
+<code>z</code> is the <strong>latent code</strong> — a vector with <code>d_latent</code> ≪ <code>d_input</code>
+dimensions. <code>x_hat</code> is the reconstructed input, the same shape
+as <code>x</code>. The loss is mean-squared reconstruction error.</p>
+<p>The encoder and decoder are typically multi-layer perceptrons
+(dense layers + non-linearities), with the architecture roughly
+symmetric. A common shape:</p>
+<pre><code>Encoder:  64 → 32 → 16 → d_latent     (with ReLU / Tanh)
+Decoder:  d_latent → 16 → 32 → 64     (with ReLU + linear output)
+</code></pre>
+<p>The shrinking-then-expanding shape is the <em>bottleneck</em> —
+dimensions are squeezed down to <code>d_latent</code> then expanded back
+out. The decoder cannot recover the original <code>x</code> perfectly
+from a code that smaller than the input; it can only recover
+what fits through the bottleneck. Training the network to
+minimise reconstruction error therefore forces the bottleneck
+to carry as much information about <code>x</code> as possible.</p>
+<hr />
+<h2>The training loop</h2>
+<p>Standard mini-batch SGD or Adam on the reconstruction loss:</p>
+<pre><code>for epoch in 1..n_epochs:
+    for batch in shuffled(training_data):
+        z = encoder(batch)
+        x_hat = decoder(z)
+        loss = mean_squared_error(batch, x_hat)
+        backprop(loss, encoder.params + decoder.params)
+        optimiser.step()
+</code></pre>
+<p>Standard backpropagation through both networks treated as one
+graph. The encoder learns to extract features that make
+reconstruction easy; the decoder learns to invert that
+extraction. Together they discover a compressed representation
+that preserves the input&rsquo;s structure.</p>
+<p>After training, the encoder can be used standalone — as a
+non-linear feature extractor, a visualisation tool, or the
+starting point for downstream classification.</p>
+<hr />
+<h2>Variants</h2>
+<p>Several modifications change what the autoencoder learns.</p>
+<p><strong>Denoising autoencoder</strong> (Vincent et al, 2008). Add random
+noise to the input before feeding it to the encoder; require
+the decoder to output the <em>clean</em> original. The bottleneck
+must now capture features robust to noise — and the network
+learns more useful representations as a side effect. This is
+the algorithmic ancestor of diffusion models and of BERT&rsquo;s
+masked-token pretraining.</p>
+<p><strong>Sparse autoencoder.</strong> Add an L1 penalty on the latent code,
+encouraging most code dimensions to be zero. The active
+dimensions become specialised &ldquo;feature detectors&rdquo;. Used in
+classical unsupervised feature learning before deep
+pretraining took over.</p>
+<p><strong>Contractive autoencoder.</strong> Add a penalty on the Frobenius
+norm of the encoder Jacobian. The encoder is encouraged to
+produce locally-stable codes — small perturbations of <code>x</code>
+should not change <code>z</code> much. Robust to noise without the
+denoising trick.</p>
+<p><strong>Variational autoencoder (VAE)</strong> (Kingma &amp; Welling, 2014).
+The encoder outputs the <em>parameters of a probability
+distribution</em> over <code>z</code> rather than a deterministic code. The
+decoder samples from that distribution. A KL-divergence
+regulariser keeps the encoded distribution close to a
+standard Gaussian. The result: a <em>generative</em> autoencoder
+you can sample from to produce new data. The conceptual
+foundation of every latent-variable generative model.</p>
+<p><strong>Masked autoencoder.</strong> The training task is to predict a
+masked-out portion of the input from the unmasked rest.
+Vision: He et al&rsquo;s MAE (2021) masks random patches of an
+image. Text: BERT masks random tokens. The trained encoder is
+the workhorse representation network for downstream tasks.</p>
+<p>The simple deterministic autoencoder this article implements
+is the simplest member of a very large family.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script trains a small autoencoder on the
+scikit-learn digits dataset (the same 1797 × 64 dataset we
+used in PCA and UMAP). Architecture: 64 → 32 → 8 → 32 → 64,
+ReLU activations, Adam optimiser, 300 epochs.</p>
+<pre><code>DEMO 1 --- Autoencoder from scratch on the digits dataset
+  Architecture       : 64 → 32 → 8 → 32 → 64  (ReLU + linear out)
+  Optimiser          : Adam, lr=1e-3, batch_size=64
+  Epochs             : 300
+  Final train loss   : 0.2453
+  Final test loss    : 0.4063
+</code></pre>
+<pre><code>DEMO 2 --- PCA at the same bottleneck size for comparison
+  n_components       : 8
+  Train MSE          : 0.4392
+  Test MSE           : 0.5104
+</code></pre>
+<pre><code>DEMO 3 --- KNN-in-latent-space classification accuracy
+  Autoencoder latent (8d)  KNN accuracy : 0.903
+  PCA latent (8d)          KNN accuracy : 0.919
+  Raw 64-d pixels          KNN accuracy : 0.983
+</code></pre>
+<p>Three observations.</p>
+<p><strong>The autoencoder achieves a lower reconstruction error than
+PCA at the same bottleneck size</strong> (0.41 vs 0.51 test MSE on
+standardised features). The non-linear encoder discovers a
+slightly more compact compression than PCA&rsquo;s linear
+projection — modestly so on the digits dataset, where the
+structure is mostly linear and PCA already does well.</p>
+<p><strong>Downstream KNN classification tells a different story.</strong>
+PCA&rsquo;s linear latent (91.9%) slightly <em>beats</em> the
+autoencoder&rsquo;s non-linear latent (90.3%). On a small dataset
+with linear-ish structure, an over-trained autoencoder can
+overfit reconstruction at the cost of discriminative
+features. The lesson: <strong>lower reconstruction error does not
+guarantee a better latent space for downstream tasks</strong>. The
+benefit of autoencoders shows up on larger, more genuinely
+non-linear datasets (Fashion-MNIST, ImageNet, audio
+spectrograms).</p>
+<p><strong>Training is much slower than PCA.</strong> PCA fits in 0.01
+seconds; the autoencoder takes ~10 seconds for 300 epochs.
+On large datasets the gap grows — and the trade-off is
+typically worth it only when the data has substantial
+non-linear structure that PCA cannot capture.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Two costs dominate:</p>
+<p><strong>Training.</strong> Per batch: one forward pass through <code>L</code> layers
+each of size ~<code>d</code> is <code>O(d²)</code> per layer, so <code>O(L · d²)</code> per
+batch. Backprop is the same order. With <code>n / B</code> batches per
+epoch and <code>E</code> epochs, total cost is <code>O(E · n · L · d² / B)</code>.
+For a small autoencoder on the digits dataset (300 epochs,
+1437 train, 64-d input, 4 layers) that is ~milliseconds per
+batch, seconds total.</p>
+<p><strong>Encoding new data.</strong> One forward pass through the encoder:
+<code>O(L · d²)</code> per example. Sub-millisecond on small models, 
+linear in the input size for large ones.</p>
+<p>Autoencoders scale to large data with mini-batch training. The
+deep-learning ecosystem (PyTorch, JAX) provides GPU
+acceleration that takes million-sample autoencoders from days
+to minutes.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>Autoencoders and their descendants are everywhere in modern
+ML:</p>
+<p><strong>Self-supervised pretraining.</strong> Every modern transformer-
+based language model (BERT, GPT, T5) pretrains with some
+form of masked-input reconstruction — the masked autoencoder
+recipe. The pretrained encoder is then fine-tuned for
+downstream tasks. This is the single biggest application
+area for the autoencoder idea.</p>
+<p><strong>Anomaly detection.</strong> Train an autoencoder on &ldquo;normal&rdquo; data;
+points with high reconstruction error are anomalies. Used in
+manufacturing quality control, fraud detection, network
+intrusion detection — anywhere &ldquo;normal&rdquo; is well-defined and
+abnormal is rare.</p>
+<p><strong>Image and video compression.</strong> Neural image codecs (e.g.
+Ballé et al&rsquo;s hyperprior models, JPEG-AI) are conceptually
+autoencoders with entropy-coded latent representations. The
+modern follow-up to JPEG / HEIC.</p>
+<p><strong>Generative modelling via VAE.</strong> Variational autoencoders
+produce sampleable generative models from imagery, audio,
+text, and molecular structures. The first wave of practical
+deep generative models before GANs and diffusion took over.</p>
+<p><strong>Recommendation systems.</strong> Train an autoencoder on user-item
+interaction matrices; the latent codes give compact user and
+item embeddings for downstream collaborative filtering.</p>
+<p><strong>Drug discovery.</strong> Train a VAE on molecular structures
+(SMILES strings or graph representations); sample from the
+latent space to generate novel candidate molecules. An active
+area of pharma ML research.</p>
+<p><strong>Diffusion models.</strong> Modern image / video / audio generation
+(Stable Diffusion, DALL-E 3, Midjourney, Sora) all use a
+<em>denoising</em> autoencoder trained to predict the noise added
+to an image at every diffusion step. The autoencoder
+machinery — bottleneck, reconstruction loss, neural-network
+parameterisation — is the foundation.</p>
+<p>The pattern: deterministic autoencoders are rare in
+production today, but their descendants (VAEs, denoising
+autoencoders, masked autoencoders) dominate generative ML
+and self-supervised pretraining.</p>
+<hr />
+<h2>When NOT to use autoencoders</h2>
+<p><strong>When the data is small.</strong> Neural networks need lots of data.
+For <code>n &lt; 10⁴</code> PCA + a downstream model is usually faster,
+simpler, and just as accurate.</p>
+<p><strong>When you need a linear feature space.</strong> Autoencoders learn
+non-linear codes. If downstream tasks require linear
+interpretation (regression on the codes, simple feature
+importance), PCA is the right tool.</p>
+<p><strong>When training time is a hard constraint.</strong> PCA fits in
+milliseconds; even small autoencoders take seconds to
+minutes. For production pipelines with tight retrain budgets,
+PCA wins.</p>
+<p><strong>When you don&rsquo;t have a clear architecture.</strong> Picking the
+right bottleneck size, depth, activation, and regularisation
+is an art. For a one-off project without time to tune,
+simpler dimensionality reduction is more reliable.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 4 of the Advanced Unsupervised Learning track is
+<strong>Anomaly Detection</strong> as a topic in its own right. Autoencoders
+are one of several approaches; Isolation Forest, One-Class
+SVM, Local Outlier Factor, and density-based methods all
+deserve coverage. The next article surveys the family.</p>
+<p>After anomaly detection comes Latent Dirichlet Allocation
+(LDA) for probabilistic topic modelling, then the Bayesian /
+Probabilistic / Causal Methods track begins.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/04-advanced-unsupervised-learning/03-autoencoders/autoencoder.py"><strong>autoencoder.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scikit-learn
+python autoencoder.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scikit-learn</code>. The script implements a
+small autoencoder from scratch in numpy with manual
+backpropagation, ReLU activations, and Adam optimisation;
+trains it on the digits dataset; compares reconstruction
+error against PCA at the same bottleneck size; and uses the
+learned latent codes for KNN classification to show that the
+non-linear compression is more discriminative than PCA&rsquo;s
+linear one. The headline insight worth pinning to the wall:
+<strong>an autoencoder is two networks trained to compress and
+reconstruct the input; the bottleneck forces the encoder to
+discover useful features; non-linear autoencoders beat PCA
+on data with curved manifolds and parameterise the
+encoder so it generalises to new data unlike t-SNE / UMAP</strong>.</p>
+<hr />
+<p><em>This is Part 3 of the Advanced Unsupervised Learning track in the Algorithms in Python series. The companion script <code>autoencoder.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. Part 2 of this track covered Gaussian Mixture Models. Part 4 will look at Anomaly Detection — the family of algorithms (autoencoders included) used to flag unusual points relative to a learned model of &ldquo;normal&rdquo; data.</em></p>
