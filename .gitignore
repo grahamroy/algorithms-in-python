@@ -1,5 +1,8 @@
 # Transient paste-bridge HTML built per-article
 _bridge.html
 
+# Transient manifest of pending drafts (regenerable)
+_manifest.html
+
 # Companion-script run outputs (reproducible from the .py files)
 *_results.png
