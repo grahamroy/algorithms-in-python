@@ -1,0 +1,264 @@
+<p>The previous three articles each implemented a <em>specific</em>
+inference algorithm — Gaussian Processes, Metropolis-Hastings
+MCMC, mean-field Variational Inference. They taught the
+machinery, but they also illustrated the problem: every
+new Bayesian model required new derivations, new sampler
+code, new convergence diagnostics. For a working analyst or
+researcher, this is a tax on every new project.</p>
+<p><strong>Probabilistic Programming Languages</strong> (PPLs) eliminate that
+tax. You declare your model — priors, likelihood, observed
+data — using a domain-specific language inside Python (or R,
+Julia). The PPL compiles your model into a computational graph,
+chooses an appropriate inference algorithm (NUTS for most
+continuous models, mean-field VI for big data, custom
+samplers for tricky cases), runs it, and gives you posterior
+samples. You write 10 lines of model definition; the PPL
+handles everything else.</p>
+<p>The big PPL stack in 2026:</p>
+<ul>
+<li><strong>PyMC</strong> (Python). The most popular Python PPL.
+  Auto-differentiation under PyTensor, NUTS by default,
+  rich variational and MCMC alternatives.</li>
+<li><strong>NumPyro</strong> (Python, JAX). PyMC&rsquo;s faster GPU-friendly
+  cousin. Same modelling API as Pyro; JAX-based inference
+  loop.</li>
+<li><strong>Stan</strong> (C++ with Python / R bindings). The gold
+  standard for Bayesian inference. Hand-tuned C++ MCMC
+  implementation, mature ecosystem, the workhorse of
+  applied Bayesian statistics.</li>
+<li><strong>Pyro</strong> (PyTorch). Deep PPL focused on variational
+  methods and amortised inference.</li>
+<li><strong>Turing.jl</strong> (Julia). The Julia ecosystem&rsquo;s PPL.</li>
+</ul>
+<p>This article uses PyMC because it&rsquo;s the most accessible
+Python PPL with the broadest user community. The same
+concepts apply to Stan / NumPyro / Pyro with minor syntax
+changes.</p>
+<p>We will build a Bayesian linear regression model the <em>PPL
+way</em> — declarative, no hand-coded sampler — and watch PyMC
+fit it with NUTS, do convergence diagnostics automatically,
+and give us posterior samples we can use for prediction with
+calibrated uncertainty.</p>
+<hr />
+<h2>What does a PPL actually do?</h2>
+<p>Given a model definition and observed data, the PPL pipeline:</p>
+<ol>
+<li><strong>Parses the model</strong> into a static computational graph
+   representing the joint density <code>p(data, parameters)</code>.</li>
+<li><strong>Compiles</strong> it with auto-differentiation (PyTensor for
+   PyMC; JAX for NumPyro; custom AD for Stan) so the
+   inference engine can compute gradients of the
+   log-posterior with respect to parameters.</li>
+<li><strong>Picks an inference algorithm</strong> — NUTS by default,
+   variational inference if requested, custom samplers
+   (Gibbs, Metropolis) if specified.</li>
+<li><strong>Runs the algorithm</strong> — manages multiple chains,
+   parallelism, tuning, adaptive step sizes.</li>
+<li><strong>Returns an InferenceData object</strong> with samples,
+   convergence diagnostics (R-hat, ESS), summary
+   statistics, and tools for posterior prediction.</li>
+</ol>
+<p>You write the <em>model</em>. The PPL handles everything else.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script fits Bayesian linear regression on the
+same dataset as Part 3 (200 noisy points from <code>y = 2 + 0.5 ·
+x + ε</code>). This time we use PyMC instead of hand-coded MCMC
+or hand-coded VI.</p>
+<pre><code class="language-python">import pymc as pm
+
+with pm.Model() as model:
+    # Priors
+    intercept = pm.Normal(&quot;intercept&quot;, mu=0, sigma=10)
+    slope = pm.Normal(&quot;slope&quot;, mu=0, sigma=10)
+    sigma = pm.HalfNormal(&quot;sigma&quot;, sigma=1)
+
+    # Likelihood
+    pm.Normal(&quot;y_obs&quot;, mu=intercept + slope * x,
+              sigma=sigma, observed=y)
+
+    # Inference
+    idata = pm.sample(1000, tune=500, chains=4,
+                      progressbar=False)
+</code></pre>
+<p>Eleven lines of model definition. No sampler code, no
+gradients, no convergence checking. PyMC compiles the
+model, picks NUTS, runs 4 chains in parallel, and returns
+posterior samples. The script then reports the summary:</p>
+<pre><code>DEMO --- PyMC fit of Bayesian linear regression
+  Model           : intercept ~ N(0, 10²), slope ~ N(0, 10²),
+                    sigma ~ HalfNormal(1²)
+  Likelihood      : y ~ N(intercept + slope·x, sigma²)
+  Sampler         : NUTS (default), 4 chains, 1000 draws + 500 tune
+  Wall time       : 14.95 s
+
+  Posterior summary:
+                      mean        sd  ess_bulk     r_hat
+  intercept         1.969     0.035  5382.648     1.001
+  slope             0.501     0.020  5206.390     1.002
+  sigma             0.489     0.025  4641.912     1.002
+</code></pre>
+<p>Four observations.</p>
+<p><strong>The model definition is the algorithm.</strong> Eleven lines of
+Python become a fully-specified probabilistic model with
+NUTS inference, parallel chains, convergence diagnostics,
+and posterior summary statistics. The hand-coded
+Metropolis-Hastings sampler from Part 2 was 80 lines for a
+<em>simpler</em> model.</p>
+<p><strong>NUTS converges fast</strong> — R-hat is 1.001–1.002 across all
+parameters, effective sample size is ~5000 (about 125% of
+the nominal 4000 draws, because NUTS draws are nearly
+uncorrelated thanks to its adaptive trajectories). The
+&ldquo;tuning&rdquo; phase (500 iterations before the recorded chain)
+is where NUTS adapts step sizes and the mass matrix;
+after tuning, the sampler is in its efficient regime.</p>
+<p><strong>Posterior summary matches the analytical answer from
+Part 3.</strong> Same data, same priors. The intercept (1.969
+mean, 0.035 std) and slope (0.501 mean, 0.020 std)
+posteriors agree to the third decimal with the exact and
+mean-field-VI results from the previous article. PyMC&rsquo;s
+posterior over <code>sigma</code> (0.489 mean) recovers the true value
+(0.50) within the noise.</p>
+<p><strong>Wall time is ~15 seconds</strong> — slower than VI (~ms) and
+slower than my hand-rolled MCMC (0.05 s for 10k samples)
+<em>on this tiny problem</em>. The PyMC overhead is dominated by
+graph compilation (one-time, several seconds). For
+non-trivial models (hundreds of parameters, custom
+likelihoods, hierarchical structure), PyMC&rsquo;s compiled
+NUTS is <em>faster</em> than any hand-coded sampler — the
+constant-factor speedup from the C++/PyTensor backend
+overwhelms the compilation cost.</p>
+<hr />
+<h2>What PPLs enable</h2>
+<p>The PPL abstraction unlocks several patterns that hand-coded
+inference cannot easily match.</p>
+<p><strong>Modular model construction.</strong> Build complex hierarchical
+models by composition: a per-school random effect plus a
+per-state random effect plus a global trend, each
+expressible in a few lines. The hand-coded equivalent is
+dozens of lines of bookkeeping.</p>
+<p><strong>Automatic sampler choice.</strong> PyMC&rsquo;s <code>pm.sample()</code> defaults
+to NUTS but can fall back to other samplers for parameters
+NUTS cannot handle (e.g. discrete parameters get
+Metropolis or Gibbs automatically).</p>
+<p><strong>Posterior predictive checks.</strong> <code>pm.sample_posterior_predictive()</code>
+draws from the posterior, runs the likelihood forward, and
+gives you simulated datasets matching your fitted model.
+Standard diagnostic for model fit.</p>
+<p><strong>Easy switching between MCMC and VI.</strong> <code>pm.fit()</code> does
+variational inference with the same model definition. Try
+both, pick the better one.</p>
+<p><strong>Reproducibility and code reuse.</strong> A model written in PyMC
+can be shared, modified, extended. The same model can be
+run by anyone with PyMC installed, no custom code required.</p>
+<p><strong>Auto-differentiation everywhere.</strong> PyTensor (the backend)
+computes log-posterior gradients for any user-defined model
+without manual derivation. This is the main reason NUTS
+became practical for non-experts.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>PPL cost is dominated by:</p>
+<p><strong>Compilation.</strong> Building the computational graph: typically
+1–10 seconds for small models, longer for big ones. One-time
+cost per model definition.</p>
+<p><strong>Per-iteration cost.</strong> Same as the underlying sampler —
+NUTS evaluates the log-posterior and its gradient many
+times per iteration (~<code>2^j</code> for adaptive tree depth <code>j</code>,
+typically 5–10).</p>
+<p><strong>Parallelism.</strong> Multi-chain MCMC is embarrassingly parallel
+— <code>M</code> chains on <code>M</code> cores is <code>M×</code> faster. PyMC handles this
+automatically.</p>
+<p><strong>Memory.</strong> Same as raw MCMC — <code>O(N · d)</code> for <code>N</code> samples in
+<code>d</code> dimensions.</p>
+<p>For non-trivial models (&gt;50 parameters, hierarchical
+structure, custom likelihoods) the PPL is <em>faster</em> than
+hand-coded MCMC because the underlying C++ / JAX / PyTensor
+backends are extensively optimised.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p><strong>Applied Bayesian statistics across science.</strong> Astronomy,
+ecology, psychology, epidemiology, pharmacology — most
+modern Bayesian analyses are done in PyMC or Stan.
+Pre-PPL, you&rsquo;d hand-code samplers; now you write the
+model and the PPL does the rest.</p>
+<p><strong>Marketing mix modelling.</strong> Bayesian hierarchical
+regression with informative priors for ad-spend
+effectiveness — Google&rsquo;s open-source LightweightMMM,
+Robyn (R), and many proprietary stacks are all PPL-based
+(PyMC, Stan, NumPyro).</p>
+<p><strong>Pharmaceutical pharmacokinetics / pharmacodynamics.</strong>
+Non-linear mixed-effects models for drug clearance with
+patient-level random effects. Stan and PyMC are the
+standard tools.</p>
+<p><strong>Election forecasting.</strong> The Economist&rsquo;s election model
+(by Andrew Gelman et al) is a Bayesian hierarchical model
+written in Stan, with state-level effects, time trends,
+and uncertainty quantification throughout.</p>
+<p><strong>Operations research and decision analysis.</strong> Cost-benefit
+analyses under uncertainty, supply-chain risk modelling,
+inventory optimisation — all Bayesian and increasingly
+PPL-based.</p>
+<p><strong>Bayesian deep learning research.</strong> Pyro and NumPyro are
+the research workhorses for variational Bayesian neural
+networks, normalising flows, and other probabilistic deep
+models.</p>
+<p><strong>Causal inference.</strong> Probabilistic causal models — with
+latent confounders, instrumental variables, mediation — are
+typically expressed in PPLs and fit with MCMC.</p>
+<hr />
+<h2>When NOT to use a PPL</h2>
+<p><strong>When the model is small and conjugate.</strong> Just compute the
+closed-form posterior — no need for PyMC overhead.</p>
+<p><strong>When you need sub-millisecond inference per query.</strong> PPL
+inference is built around full-batch MCMC. For production
+serving, fit the posterior once with PyMC, then ship a
+distilled point-estimate model.</p>
+<p><strong>When the data is huge and the posterior is unimodal.</strong>
+Stochastic gradient methods (PyTorch with built-in
+optimisers, JAX) are often a better fit than full Bayesian
+MCMC.</p>
+<p><strong>When the model is so simple that the abstraction is
+overhead.</strong> A one-line conjugate update doesn&rsquo;t need a PPL.</p>
+<p><strong>When deployment constraints rule out heavy dependencies.</strong>
+PyMC + PyTensor is ~200 MB installed. For edge / embedded
+deployment use a custom MCMC or just point estimates.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 5 of this track is <strong>Causal Inference</strong> — the family of
+methods that move from &ldquo;X is correlated with Y&rdquo; to &ldquo;X
+<em>causes</em> Y given everything else we know&rdquo;. Causal inference
+is the framework behind A/B-test analysis at scale, policy
+evaluation in economics, treatment-effect estimation in
+medicine, and counterfactual reasoning in ML
+interpretability. The mathematical toolkit (do-calculus,
+propensity scores, instrumental variables, regression
+discontinuity) is largely orthogonal to the
+sampling/optimisation tools we&rsquo;ve covered so far.</p>
+<p>After causal inference the Bayesian / Probabilistic /
+Causal track closes, and the series moves to time series
+forecasting.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/05-bayesian-probabilistic-causal/04-probabilistic-programming/probabilistic_programming.py"><strong>probabilistic_programming.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy pymc
+python probabilistic_programming.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>pymc</code>. The script fits Bayesian
+linear regression on the same dataset from Part 3 — but
+this time using PyMC instead of hand-coded MCMC or VI.
+The model definition is 11 lines; PyMC compiles it,
+selects NUTS as the sampler, runs 4 parallel chains, and
+returns a posterior with R-hat 1.0 and effective sample
+size ~3000 across all parameters, matching the analytical
+posterior to two decimal places. The headline insight worth
+pinning to the wall: <strong>probabilistic programming abstracts
+the inference machinery; you specify the model
+declaratively (priors, likelihood, observed data), the PPL
+handles compilation, sampler selection, parallelism, and
+diagnostics; for non-trivial models the PPL is faster than
+hand-coded inference and dramatically easier to write</strong>.</p>
+<hr />
+<p><em>This is Part 4 of the Bayesian, Probabilistic &amp; Causal Methods track in the Algorithms in Python series. The companion script <code>probabilistic_programming.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. Part 3 of this track covered Variational Inference. Part 5 will look at Causal Inference — moving from statistical association to causal identification.</em></p>

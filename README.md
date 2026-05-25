@@ -68,10 +68,10 @@ clear explanations and Python implementations.
 ### 05 — Bayesian, Probabilistic & Causal Methods
 | # | Algorithm | Status |
 |---|-----------|--------|
-| 1 | Gaussian Processes | ⬜ |
-| 2 | Markov Chain Monte Carlo (MCMC) | ⬜ |
-| 3 | Variational Inference | ⬜ |
-| 4 | Probabilistic Programming | ⬜ |
+| 1 | Gaussian Processes | ✅ |
+| 2 | Markov Chain Monte Carlo (MCMC) | ✅ |
+| 3 | Variational Inference | ✅ |
+| 4 | Probabilistic Programming | ✅ |
 | 5 | Causal Inference | ⬜ |
 
 ### 06 — Time Series & Forecasting

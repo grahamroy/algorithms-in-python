@@ -1,0 +1,268 @@
+<p>Part 2 introduced MCMC — the gold standard for Bayesian
+inference when the posterior has no closed form. MCMC&rsquo;s big
+strength: with enough samples, it converges to the true
+posterior, with calibrated uncertainty. MCMC&rsquo;s big weakness:
+it can be <em>very</em> slow. Sampling a posterior over a million
+parameters with reasonable effective sample size can take
+hours or days, and at internet scale it is impractical.</p>
+<p><strong>Variational Inference</strong> (VI) is the faster, approximate
+alternative. Rather than sampling the posterior, VI casts
+posterior approximation as an <strong>optimisation problem</strong>:
+choose a tractable family of distributions <code>q(θ)</code>, then find
+the member of that family that is closest (in KL-divergence)
+to the true posterior <code>p(θ | data)</code>. The optimisation can be
+done with standard gradient descent in seconds to minutes,
+even on models where MCMC would take hours.</p>
+<p>The price is approximation. The fitted <code>q</code> is the <em>best</em>
+member of its family, not the true posterior. Two
+approximation costs to be aware of: the family is usually
+parametric (Gaussians, factorised distributions) which limits
+what <code>q</code> can represent, and KL(<code>q</code> || <code>p</code>) under-estimates
+posterior variance — VI&rsquo;s approximations are typically <em>too
+confident</em>. For applications where confidence calibration
+matters (medical, financial, safety-critical) MCMC is still
+preferred; for applications where speed dominates (LDA on
+millions of documents, variational autoencoders, Bayesian
+neural networks at production scale) VI wins.</p>
+<p>This article builds variational inference from first
+principles. We will define the <strong>ELBO</strong> — the lower bound
+that VI maximises — derive the <strong>mean-field</strong> algorithm in
+which <code>q</code> factorises across parameters, implement
+coordinate-ascent VI on a Bayesian linear regression
+problem with a non-conjugate Gaussian prior, compare against
+MCMC and against the exact analytical posterior, and finish
+with the <strong>reparameterisation trick</strong> and amortised inference
+that power modern deep VI methods like variational
+autoencoders.</p>
+<hr />
+<h2>The variational framework</h2>
+<p>Given an intractable posterior <code>p(θ | data)</code>, pick a family
+of tractable distributions <code>Q</code> (typically Gaussian, or a
+factorised product of simpler distributions). The variational
+inference recipe:</p>
+<pre><code>q* = argmin_{q ∈ Q}  KL(q(θ) || p(θ | data))
+</code></pre>
+<p>KL-divergence measures how much one distribution differs
+from another. KL(<code>q</code> || <code>p</code>) is zero when <code>q == p</code> and
+positive otherwise. The closest <code>q</code> to the true posterior
+within the chosen family is the variational answer.</p>
+<p>Trouble: we cannot compute KL directly because it involves
+the unknown true posterior <code>p(θ | data)</code> — which is the
+quantity we are trying to approximate. The trick: minimising
+KL(<code>q</code> || <code>p</code>) is equivalent to <strong>maximising</strong> a quantity
+called the <strong>ELBO</strong> (Evidence Lower BOund) which depends only
+on tractable terms:</p>
+<pre><code>ELBO(q) = E_q[log p(data, θ)] - E_q[log q(θ)]
+        = E_q[log p(data | θ)]
+          - KL(q(θ) || p(θ))
+        ≤ log p(data)
+</code></pre>
+<p>The ELBO is a lower bound on the marginal log-likelihood
+<code>log p(data)</code>. Two interpretations:</p>
+<ul>
+<li><strong>Reconstruction term</strong>: <code>E_q[log p(data | θ)]</code> — how well
+  the posterior approximation explains the data.</li>
+<li><strong>Regularisation term</strong>: <code>KL(q(θ) || p(θ))</code> — how much
+  the posterior approximation deviates from the prior.</li>
+</ul>
+<p>Maximising the ELBO is exactly equivalent to minimising
+KL(<code>q</code> || <code>p</code>). Since both depend only on the prior, the
+likelihood, and <code>q</code> itself (no need for the intractable
+normaliser), we can optimise it with standard methods —
+typically coordinate ascent for simple models, stochastic
+gradient ascent for big ones.</p>
+<hr />
+<h2>The mean-field assumption</h2>
+<p>The simplest and most-used variational family is the
+<strong>mean-field</strong> family — <code>q</code> factorises across all parameters:</p>
+<pre><code>q(θ) = q_1(θ_1) · q_2(θ_2) · ... · q_d(θ_d)
+</code></pre>
+<p>Each <code>q_i</code> is an independent distribution over a single
+parameter. The optimisation breaks into per-parameter
+updates that often have closed-form solutions (one
+parameter at a time, given all others fixed).</p>
+<p>For models in the <strong>exponential family</strong> (most common
+distributions: Gaussian, Bernoulli, Poisson, etc.), the
+optimal <code>q_i</code> has a closed form:</p>
+<pre><code>log q*_i(θ_i) = E_{q_{-i}}[log p(θ, data)] + const
+</code></pre>
+<p>where <code>q_{-i}</code> is <code>q</code> with the <code>i</code>-th factor removed. The
+expectation can usually be computed analytically. Coordinate
+ascent — update each <code>q_i</code> while holding the others fixed —
+converges to a local optimum of the ELBO.</p>
+<p>The mean-field approximation is wrong whenever posterior
+parameters are <em>correlated</em> — and they usually are.
+Mean-field VI captures the marginal distributions but loses
+the correlations, which is one of the main reasons VI
+underestimates posterior variance. For some applications
+(point estimation, prediction) this doesn&rsquo;t matter; for
+others (uncertainty calibration, sensitivity analysis) it
+matters a lot.</p>
+<hr />
+<h2>A worked example: VI for Bayesian linear regression</h2>
+<p>The companion script implements variational inference for
+Bayesian linear regression — the simplest non-trivial
+Bayesian model. Data is generated from <code>y = 2 + 0.5 · x + ε</code>
+with Gaussian noise; we put Gaussian priors over the slope
+and intercept and fit the posterior three ways:</p>
+<ol>
+<li><strong>Analytical</strong> (this model is conjugate-Gaussian so the
+   exact posterior is closed-form).</li>
+<li><strong>Mean-field VI</strong> (assume the posterior factorises;
+   coordinate ascent on the ELBO).</li>
+<li><strong>MCMC</strong> (the previous article&rsquo;s Metropolis-Hastings
+   sampler).</li>
+</ol>
+<pre><code>DEMO --- VI vs MCMC vs exact posterior for Bayesian linear regression
+  True parameters       : intercept = 2.00, slope = 0.50
+  Training set          : 200 noisy points
+  Noise (sigma)         : 0.5
+
+  Method            intercept (mean ± std)  slope (mean ± std)  time (s)
+  ----------------- ----------------------  -----------------   --------
+  Exact analytical            1.97 ± 0.035       0.50 ± 0.020      0.000
+  Mean-field VI               1.97 ± 0.035       0.50 ± 0.020      0.000
+  MCMC (10k samples)          1.97 ± 0.035       0.50 ± 0.020      0.047
+</code></pre>
+<p>Three observations.</p>
+<p><strong>On this conjugate-Gaussian model VI is exact.</strong> The
+mean-field family happens to <em>contain</em> the true posterior
+(both marginals are Gaussian, both are independent under
+the analytical posterior). The fitted variational
+parameters match the exact ones to 3+ decimal places.</p>
+<p><strong>MCMC also recovers the exact posterior.</strong> With 10,000
+samples, the MCMC posterior mean and std match the
+analytical ones to roughly the same precision.</p>
+<p><strong>VI is two orders of magnitude faster than MCMC</strong> here —
+sub-millisecond for VI vs 47 ms for MCMC — and that gap
+widens dramatically on larger problems. By the time you
+have a million data points or a thousand parameters, VI
+is the only practical option for exploratory work.</p>
+<p>For non-conjugate models (the realistic case) VI is
+typically only an approximation — the mean-field family
+cannot represent the true posterior, and the fitted <code>q</code> is
+biased. The bias is usually predictable (under-estimated
+variance, mode-seeking) and acceptable for most downstream
+tasks.</p>
+<hr />
+<h2>The modern stack: reparameterisation and amortisation</h2>
+<p>Two extensions made VI dominant in deep learning:</p>
+<p><strong>The reparameterisation trick</strong> (Kingma &amp; Welling, 2014;
+Rezende et al, 2014). When <code>q</code> is Gaussian, we can sample
+<code>θ ~ q(θ; μ, σ)</code> as <code>θ = μ + σ · ε</code> with <code>ε ~ N(0, 1)</code>. This
+makes the sampling <em>differentiable</em> with respect to <code>μ</code> and
+<code>σ</code>, which lets us backpropagate through ELBO estimates and
+optimise the variational parameters with standard gradient
+descent. The technical foundation of <strong>Variational
+Autoencoders</strong>.</p>
+<p><strong>Amortised inference.</strong> Instead of fitting a separate <code>q</code>
+for each data point, train a single <em>inference network</em> that
+maps any input <code>x</code> to its variational parameters <code>(μ(x),
+σ(x))</code>. Now inference is a forward pass through the
+inference network — cheap, parametric, generalisable to new
+data. This is exactly what a VAE encoder does: it amortises
+the per-image variational inference into a learned
+network.</p>
+<p>These two ideas — reparameterisation gradients plus
+amortised inference — turn classical VI into the engine
+behind every modern deep generative model. VAEs, normalising
+flows, deep Bayesian neural networks all use the same
+machinery scaled up.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>VI&rsquo;s cost is much lower than MCMC&rsquo;s:</p>
+<p><strong>Coordinate-ascent VI</strong> for mean-field exponential families
+is roughly <code>O(I · n · d)</code> per iteration where <code>I</code> is the
+number of coordinate sweeps, <code>n</code> is the data size, and <code>d</code>
+is the parameter dimension. Typically converges in 10–100
+iterations.</p>
+<p><strong>Stochastic VI (SVI)</strong> processes mini-batches — <code>O(B · d)</code>
+per gradient step where <code>B</code> is the batch size. Scales to
+millions of data points like SGD.</p>
+<p><strong>Amortised VI</strong> (VAE-style) adds the cost of training the
+inference network — but inference at test time is a single
+network forward pass.</p>
+<p>Compare to MCMC: per-iteration costs are similar but the
+<em>number of iterations</em> differs by 100–10000×. VI converges
+in tens to hundreds of iterations; MCMC needs tens of
+thousands.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p><strong>Variational Autoencoders.</strong> The deep-learning workhorse
+for unsupervised representation learning. Encoder = inference
+network; decoder = likelihood model; ELBO is the training
+objective. Used everywhere from image generation (early
+VAE generation pre-GAN, now revived in latent-diffusion
+models) to molecular design.</p>
+<p><strong>Latent Dirichlet Allocation.</strong> Variational EM is the
+standard training algorithm for LDA at scale (Hoffman et al,
+2013). Powers production topic modelling at every major
+search engine and content recommendation system.</p>
+<p><strong>Bayesian neural networks.</strong> VI gives a tractable way to
+fit posteriors over neural network weights — used for
+uncertainty estimation in deep learning, especially in
+safety-critical and out-of-distribution detection
+applications. The &ldquo;mean-field Gaussian VI&rdquo; recipe is the
+standard baseline; more sophisticated families (normalising
+flows, structured posteriors) push the frontier.</p>
+<p><strong>Probabilistic programming languages.</strong> PyMC, Pyro, and
+NumPyro all offer VI as an alternative to MCMC — useful when
+MCMC is too slow.</p>
+<p><strong>Normalising flows.</strong> Combine VI with invertible neural
+networks for richer variational families that can capture
+correlations and non-Gaussian shapes. State-of-the-art deep
+generative modelling.</p>
+<p><strong>Causal discovery.</strong> Variational methods are used to fit
+latent-variable causal models, particularly the differentiable
+DAG-learning frameworks introduced in the late 2010s.</p>
+<hr />
+<h2>When NOT to use VI</h2>
+<p><strong>When you need calibrated uncertainty.</strong> Mean-field VI
+consistently underestimates posterior variance. For
+applications where the <em>width</em> of the posterior matters,
+MCMC or full-rank Gaussian VI are better.</p>
+<p><strong>When the posterior is multimodal.</strong> Standard VI is
+<em>mode-seeking</em> — it concentrates on a single mode and
+ignores the rest. Mixture variational families help but
+need careful design.</p>
+<p><strong>When you don&rsquo;t trust the variational family.</strong> Mean-field
+is wrong whenever parameters are correlated (most of the
+time). Pick a richer family or use MCMC.</p>
+<p><strong>When the model is small and conjugate.</strong> Closed-form
+posteriors exist; just compute them.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 4 of this track is <strong>Probabilistic Programming</strong> —
+the systems (PyMC, Stan, Pyro, NumPyro, Turing.jl) that let
+you write probabilistic models declaratively and have the
+framework choose the right inference algorithm (HMC, NUTS,
+VI, mean-field VI, normalising flows) automatically. The
+shift is from &ldquo;implement my own MCMC / VI for this specific
+model&rdquo; to &ldquo;write the model, hit fit, see what happens&rdquo;.</p>
+<p>After Probabilistic Programming the track closes with
+<strong>Causal Inference</strong> — the family of methods that move
+beyond statistical association to causal identification.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/05-bayesian-probabilistic-causal/03-variational-inference/variational_inference.py"><strong>variational_inference.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scipy
+python variational_inference.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scipy</code>. The script fits Bayesian
+linear regression three ways — exact closed-form posterior,
+mean-field VI by coordinate ascent on the ELBO, and MCMC
+with Metropolis-Hastings — and verifies all three agree on
+mean and std of the slope and intercept posteriors on a
+conjugate Gaussian model. The headline insight worth
+pinning to the wall: <strong>VI turns Bayesian inference into
+optimisation by minimising KL-divergence to the true
+posterior within a tractable family; the optimisation
+maximises the ELBO; the result is much faster than MCMC at
+the cost of approximation, typically under-estimating
+posterior variance because mean-field families cannot
+capture parameter correlations</strong>.</p>
+<hr />
+<p><em>This is Part 3 of the Bayesian, Probabilistic &amp; Causal Methods track in the Algorithms in Python series. The companion script <code>variational_inference.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. Part 2 of this track covered MCMC. Part 4 will look at Probabilistic Programming — the libraries that let you write models and pick inference engines declaratively.</em></p>
