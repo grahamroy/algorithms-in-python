@@ -1,0 +1,361 @@
+<p>The previous four articles in this track were all about
+inference <em>over parameters</em> — given a probabilistic model and
+some data, what is the posterior distribution over the model&rsquo;s
+unknowns? Gaussian Processes, MCMC, Variational Inference, and
+Probabilistic Programming all share this framing.</p>
+<p><strong>Causal Inference</strong> asks a fundamentally different question.
+Not &ldquo;given that I observed <code>X = x</code>, what is <code>Y</code>?&rdquo; but &ldquo;if I
+<em>intervene</em> and <em>set</em> <code>X = x</code>, what will <code>Y</code> be?&rdquo; The shift
+from observation to intervention is the conceptual bridge
+between statistical learning and decision-making. Every A/B
+test, every drug trial, every policy evaluation, every &ldquo;what
+would have happened if&rdquo; counterfactual rests on this
+distinction.</p>
+<p>The framework is older than machine learning. Donald Rubin&rsquo;s
+<strong>potential outcomes</strong> model goes back to the 1970s; Judea
+Pearl&rsquo;s <strong>do-calculus</strong> and causal graphical models were
+formalised in the 1990s. Both frameworks describe the same
+underlying mathematics, and the modern causal-machine-learning
+stack (causal forests, double machine learning, debiased
+regression) sits on top of both.</p>
+<p>This article builds causal inference from first principles. We
+will explain why &ldquo;correlation ≠ causation&rdquo; is a deep statement
+about the limits of observational data, formalise the
+<strong>potential outcomes framework</strong> and the <strong>fundamental problem
+of causal inference</strong>, walk through Pearl&rsquo;s <strong>do-calculus</strong> and
+the <strong>backdoor criterion</strong> for identifying causal effects,
+implement two of the standard adjustment methods —
+<strong>regression adjustment</strong> and <strong>inverse-propensity weighting</strong>
+— on a confounded synthetic dataset, show they recover the
+true treatment effect while the naive association doesn&rsquo;t, and
+finish with the modern causal-ML stack (causal forests,
+DoWhy, EconML) and where causal inference is doing real work
+in production.</p>
+<hr />
+<h2>Why correlation isn&rsquo;t enough</h2>
+<p>The classic example: ice cream sales correlate with drowning
+deaths. Eat more ice cream → die from drowning? Obviously not.
+Both are driven by a third variable — hot weather — that we
+haven&rsquo;t accounted for. The correlation is real; the causal
+interpretation is wrong.</p>
+<p>The general form: a <strong>confounder</strong> <code>Z</code> causes both <code>X</code> (the
+putative cause) and <code>Y</code> (the putative effect). If we condition
+on <code>Z</code>, the correlation between <code>X</code> and <code>Y</code> disappears. If we
+ignore <code>Z</code>, the correlation is spurious.</p>
+<pre><code>        Z (weather)
+       / \
+      ↓   ↓
+     X     Y
+   (ice    (drowning)
+    cream)
+</code></pre>
+<p>Real-world variants are everywhere:</p>
+<ul>
+<li>Higher hospital admissions correlate with worse patient
+  outcomes (sicker patients go to hospital).</li>
+<li>Education correlates with income (and with intelligence,
+  family background, motivation — the confounders).</li>
+<li>Ad clicks correlate with sales (showing ads to people more
+  likely to buy anyway).</li>
+</ul>
+<p>In every case, the observational correlation between <code>X</code> and
+<code>Y</code> is an unreliable guide to what would happen if we
+<em>intervened</em> on <code>X</code> (running an ad campaign vs not, sending
+patients to hospital vs not, requiring more education vs not).</p>
+<hr />
+<h2>The potential outcomes framework</h2>
+<p>Rubin&rsquo;s framework gives a clean way to define causal effects.
+For each unit <code>i</code> (a patient, a customer, a country), define:</p>
+<ul>
+<li><code>Y_i(1)</code> — the outcome if unit <code>i</code> were treated.</li>
+<li><code>Y_i(0)</code> — the outcome if unit <code>i</code> were <em>not</em> treated.</li>
+</ul>
+<p>The <strong>individual treatment effect</strong> is <code>Y_i(1) - Y_i(0)</code>. The
+<strong>average treatment effect (ATE)</strong> is its average across the
+population:</p>
+<pre><code>ATE = E[Y(1) - Y(0)]
+</code></pre>
+<p>This is what we want to estimate.</p>
+<p>The <strong>fundamental problem of causal inference</strong>: for any given
+unit, we observe <em>either</em> <code>Y_i(1)</code> <em>or</em> <code>Y_i(0)</code>, never both.
+You took the drug or you didn&rsquo;t; you saw the ad or you didn&rsquo;t.
+The counterfactual is genuinely missing data.</p>
+<p>Causal inference is, formally, the problem of imputing the
+missing counterfactual outcomes — using <em>other</em> units who
+<em>did</em> receive the treatment we want to estimate as
+stand-ins for the missing potential outcomes of the
+<em>untreated</em> units, and vice versa.</p>
+<p>For this imputation to be valid we need three assumptions:</p>
+<p><strong>SUTVA (Stable Unit Treatment Value Assumption)</strong>: one unit&rsquo;s
+treatment doesn&rsquo;t affect another unit&rsquo;s outcome. Vaccinating
+me doesn&rsquo;t change your potential outcomes. (This is violated
+by network effects, herd immunity, market spillovers — and
+fixing it is hard.)</p>
+<p><strong>Unconfoundedness (a.k.a. ignorability)</strong>: conditional on
+observed covariates <code>Z</code>, treatment assignment is independent
+of potential outcomes. Once you control for everything that
+predicts both treatment and outcome, the residual
+treatment-outcome relationship is causal. This is the big
+assumption — and it&rsquo;s almost never literally true; the
+question is how close to true it is.</p>
+<p><strong>Positivity</strong>: every unit has a non-zero probability of
+receiving each treatment, conditional on covariates. If
+nobody with a particular profile ever gets treated, you can&rsquo;t
+estimate the effect for that subpopulation.</p>
+<p>The three together — SUTVA, unconfoundedness, positivity —
+let us identify the ATE from observational data.</p>
+<hr />
+<h2>Pearl&rsquo;s do-calculus</h2>
+<p>The parallel framework: causal <strong>graphical models</strong> with
+explicit <code>do()</code> operators.</p>
+<p>Write the joint distribution as a causal DAG (directed
+acyclic graph) where edges represent direct causal effects.
+Then distinguish:</p>
+<ul>
+<li><code>P(Y | X = x)</code> — the <em>observational</em> conditional. The
+  distribution of <code>Y</code> among units that happened to have
+  <code>X = x</code>.</li>
+<li><code>P(Y | do(X = x))</code> — the <em>interventional</em> distribution.
+  The distribution of <code>Y</code> if we <em>force</em> <code>X</code> to equal <code>x</code>,
+  cutting it off from its causes.</li>
+</ul>
+<p>In a confounded DAG these are different. In a randomised
+experiment they&rsquo;re equal (because randomisation severs
+the backdoor paths from <code>X</code> to <code>Y</code>).</p>
+<p><strong>Pearl&rsquo;s backdoor criterion</strong> gives a procedure: a set <code>Z</code>
+of variables suffices to identify the causal effect of <code>X</code>
+on <code>Y</code> if (a) <code>Z</code> blocks every backdoor path from <code>X</code> to <code>Y</code>,
+and (b) <code>Z</code> contains no descendant of <code>X</code>. Adjust for <code>Z</code>
+and the resulting estimate equals <code>P(Y | do(X))</code>.</p>
+<p>In our ice-cream example, <code>Z = {weather}</code> is a backdoor
+adjustment set: condition on weather, and ice-cream
+consumption is no longer associated with drowning. The
+backdoor criterion formalises what most working analysts
+call &ldquo;controlling for confounders&rdquo;.</p>
+<hr />
+<h2>Three methods for estimating causal effects</h2>
+<p>Given a dataset with treatment <code>T ∈ {0, 1}</code>, outcome <code>Y</code>,
+and covariates <code>Z</code> (assumed sufficient for
+unconfoundedness), three workhorse methods:</p>
+<h3>Regression adjustment</h3>
+<p>Fit <code>E[Y | T, Z]</code> with a regression — linear, gradient
+boosting, neural net, whatever. The ATE estimate:</p>
+<pre><code>ATE_hat = mean( m(T=1, Z_i) - m(T=0, Z_i) )   over all i
+</code></pre>
+<p>For each unit, predict what <code>Y</code> would be under both
+treatment and control using the fitted model, take the
+difference, average over the dataset. Simple, interpretable,
+and asymptotically unbiased if the model is correctly
+specified.</p>
+<h3>Inverse-propensity weighting (IPW)</h3>
+<p>Estimate the <strong>propensity score</strong> <code>e(Z) = P(T = 1 | Z)</code> — the
+probability a unit is treated, given covariates. Then weight
+observations to make the treated and control groups look
+balanced:</p>
+<pre><code>ATE_hat = mean( (T_i / e(Z_i)) * Y_i  -  ((1 - T_i) / (1 - e(Z_i))) * Y_i )
+</code></pre>
+<p>Treated units with low propensity (unlikely to be treated)
+get high weight; untreated units with high propensity get
+high weight. The reweighted samples mimic what a randomised
+experiment would have produced. Asymptotically unbiased if
+the propensity model is correct.</p>
+<h3>Doubly robust estimation</h3>
+<p>Combine both: use regression adjustment as the primary
+estimator, then apply IPW as a correction term. If <em>either</em>
+the outcome model or the propensity model is correct, the
+ATE estimate is unbiased. This is &ldquo;double robustness&rdquo; — and
+it&rsquo;s the foundation of the modern causal-ML stack.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script simulates confounded observational data:
+500 units with one binary treatment <code>T</code>, two confounders
+<code>Z_1, Z_2</code>, an outcome <code>Y</code> that depends on both, and a true
+ATE of 2.0. We then estimate the ATE three ways:</p>
+<pre><code>DEMO --- Causal effect estimation on confounded synthetic data
+  Sample size : 500 units
+  True ATE    : 2.00
+  Treatment   : binary, propensity depends on Z_1, Z_2
+  Outcome     : Y = 1.0 + 2.0 * T + 1.5 * Z_1 + 1.2 * Z_2 + noise
+
+  Method                                   Estimated ATE    Bias
+  ------------------------------------     -------------   -----
+  Naive (simple difference in means)                4.08   +2.08
+  Regression adjustment (linear)                    1.93   -0.07
+  Inverse propensity weighting                      2.14   +0.14
+</code></pre>
+<p>Three observations.</p>
+<p><strong>The naive estimate is dramatically biased.</strong> The
+difference-in-means estimate is 4.08 — more than double the
+true effect — because units with high <code>Z_1</code> and <code>Z_2</code> are both
+more likely to be treated AND more likely to have high <code>Y</code>.
+The naive estimate confuses correlation with causation.</p>
+<p><strong>Regression adjustment recovers the true effect.</strong> With a
+correctly-specified linear outcome model, the regression
+estimate (1.93) is within 0.07 of the true 2.00.</p>
+<p><strong>IPW also recovers the true effect.</strong> The IPW estimate
+(2.14) is within 0.14 — slightly noisier than regression
+adjustment on this dataset, but still well within sampling
+error of the true value. The two methods agree because the
+simulation honours both modelling assumptions.</p>
+<p>On real data only one of the two models is usually
+well-specified — which is why doubly-robust estimators
+(combining both) are the production default. Both methods
+fail catastrophically if a key confounder is <em>missing</em> from
+the data; no statistical technique recovers from unmeasured
+confounding.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Causal estimation cost is dominated by the underlying
+machine-learning method:</p>
+<p><strong>Regression adjustment</strong> is the cost of training the chosen
+regressor — <code>O(n · d²)</code> for linear, <code>O(n · d · T · depth)</code> for
+gradient boosting, etc.</p>
+<p><strong>IPW</strong> trains a propensity classifier (same cost as
+regression), then does an <code>O(n)</code> weighted average. The
+expensive part is hyperparameter-tuning the propensity
+model to get well-calibrated probabilities.</p>
+<p><strong>Doubly-robust estimation</strong> trains both models. Modern
+double/debiased ML (Chernozhukov et al, 2018) uses
+cross-fitting to avoid overfitting bias — split the data,
+fit each model on one half, score on the other. Cost is
+constant-factor more than a single model.</p>
+<p><strong>Causal forests</strong> (Athey &amp; Wager, 2019) fit a random
+forest with a specific splitting criterion that targets
+<em>heterogeneous</em> treatment effects (different effects for
+different subpopulations). Same <code>O(n · log n)</code> scaling as
+random forests.</p>
+<p><strong>Synthetic controls</strong> (Abadie et al) construct a weighted
+combination of untreated units as a counterfactual for each
+treated unit. Quadratic in the number of units for naive
+implementations, cheaper with approximations.</p>
+<p>For modern tabular causal datasets (<code>n &lt; 10⁶</code>, <code>d &lt; 100</code>),
+all of these run in seconds to minutes.</p>
+<hr />
+<h2>The modern causal-ML stack</h2>
+<p><strong>DoWhy</strong> (Microsoft). Python library that wraps the
+end-to-end causal inference workflow: specify a causal DAG,
+identify the estimand using do-calculus, estimate it with a
+chosen method, run refutation tests. The standard for
+introductory and applied causal analysis in Python.</p>
+<p><strong>EconML</strong> (Microsoft). Heavier on the ML side. Implements
+double machine learning, causal forests, heterogeneous
+treatment effect estimation, instrumental variables.
+Production-grade.</p>
+<p><strong>CausalML</strong> (Uber). Similar scope, emphasis on uplift
+modelling for marketing — &ldquo;which users will <em>change</em>
+behaviour if we send them a coupon?&rdquo; rather than &ldquo;which
+users will buy?&rdquo;.</p>
+<p><strong>PyMC and Bayesian causal models</strong>. Express the causal
+structure as a probabilistic program, do full Bayesian
+inference over the treatment effect. The right tool when
+prior knowledge matters or when uncertainty quantification
+is critical.</p>
+<p><strong>Synthetic controls (causalimpact, causalpy)</strong>. The
+standard for evaluating one-time interventions where a
+randomised control is impossible (a country&rsquo;s policy
+change, a regulatory event affecting one company).</p>
+<p>The pattern: pick your causal estimand → write down the
+assumptions you&rsquo;re willing to make → use the corresponding
+library to estimate it → run refutation/sensitivity
+analyses to check robustness.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p><strong>A/B testing at scale.</strong> Every major tech company runs
+hundreds of A/B tests per week. The basic infrastructure
+is randomised assignment (which makes causal estimation
+trivial), but advanced topics — interference between users,
+long-term vs short-term effects, heterogeneous effects across
+subpopulations — are causal-inference territory and lean
+heavily on EconML / DoWhy / CausalML.</p>
+<p><strong>Policy evaluation in economics.</strong> Synthetic controls,
+difference-in-differences, regression discontinuity — these
+econometric methods are the foundation of modern empirical
+economics. The 2021 Nobel Prize in Economics went to Card,
+Angrist, and Imbens for exactly this work.</p>
+<p><strong>Medical treatment effects.</strong> Comparative effectiveness
+research — does drug A actually work better than drug B in
+practice (not just in the trial)? — is almost entirely
+observational causal inference, typically with propensity
+score methods.</p>
+<p><strong>Causal recommendation systems.</strong> Recommend an item <em>because
+it will change the user&rsquo;s behaviour</em>, not because the user
+would have bought it anyway. Uber&rsquo;s CausalML and Spotify&rsquo;s
+work on counterfactual recommendation are examples.</p>
+<p><strong>ML interpretability.</strong> What would the prediction be if I
+changed this feature? The counterfactual question is causal,
+not statistical, and modern interpretability tools (SHAP, LIME)
+are increasingly framed in causal terms.</p>
+<p><strong>Marketing attribution.</strong> Which channel actually drove the
+sale? Naive last-touch attribution is associational and
+wrong; causal attribution methods give defensible answers.</p>
+<p><strong>Personalised medicine.</strong> Estimate the treatment effect for
+<em>this specific patient</em> given their covariates. Causal
+forests / meta-learners (S-learner, T-learner, X-learner)
+are the standard tools.</p>
+<hr />
+<h2>When NOT to use causal inference</h2>
+<p><strong>When you only need prediction.</strong> Predict <code>Y</code> from <code>X</code> — no
+intervention, no counterfactual? Use standard supervised
+learning. Causal inference asks a strictly harder question
+and pays for it in stronger assumptions.</p>
+<p><strong>When randomisation is feasible.</strong> An RCT side-steps
+unconfoundedness entirely. If you can randomise the
+treatment, do it; analyse with a simple difference in means;
+go home.</p>
+<p><strong>When critical confounders are unmeasured.</strong> No method
+saves you from unmeasured confounding. Sensitivity analyses
+(Rosenbaum bounds, E-values) quantify the <em>vulnerability</em>
+of your estimate to plausible hidden confounders — they
+don&rsquo;t fix the problem.</p>
+<p><strong>When the data is observational and noisy.</strong> Causal
+estimates with 95% CIs spanning zero are usually because
+the dataset cannot identify the effect. Get more data, or
+accept that the question is unanswerable.</p>
+<p><strong>When the question is really about prediction, not
+intervention.</strong> &ldquo;What is the expected income of someone with
+a master&rsquo;s degree?&rdquo; is associational. &ldquo;What would my income
+be if I got a master&rsquo;s degree?&rdquo; is causal. The first is
+descriptive analytics; the second is a hard problem.</p>
+<hr />
+<h2>What comes next</h2>
+<p>This is the final article in the <strong>Bayesian, Probabilistic
+&amp; Causal Methods</strong> track. Five articles: Gaussian Processes
+(closed-form Bayesian regression), MCMC (sampling-based
+inference), Variational Inference (optimisation-based
+inference), Probabilistic Programming (the libraries that
+let you specify models declaratively), and Causal Inference
+(moving beyond association to identifying causes).</p>
+<p>The next track is <strong>Time Series &amp; Forecasting</strong>, opening
+with ARIMA — the classical, decades-old statistical
+forecasting method that remains the right baseline for any
+new time series problem. After ARIMA the track covers
+exponential smoothing, state-space models, Prophet, and
+modern Temporal Fusion Transformers.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/05-bayesian-probabilistic-causal/05-causal-inference/causal_inference.py"><strong>causal_inference.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy scikit-learn
+python causal_inference.py
+</code></pre>
+<p>It needs <code>numpy</code> and <code>scikit-learn</code>. The script simulates a
+confounded observational dataset (500 units, true ATE of 2.0,
+treatment assignment depending on two confounders), estimates
+the average treatment effect three ways — naive
+difference-in-means (biased), regression adjustment
+(unbiased given correct outcome model), and
+inverse-propensity weighting (unbiased given correct propensity
+model) — and shows the naive estimate is dramatically wrong
+while the two adjustment methods recover the true effect to
+within statistical noise. The headline insight worth pinning
+to the wall: <strong>causal inference is the problem of imputing
+counterfactuals you cannot observe; observational
+identification rests on unconfoundedness (no important
+omitted confounder); regression adjustment and
+inverse-propensity weighting are the workhorse methods, and
+doubly-robust estimators (combining both) are the modern
+production default</strong>.</p>
+<hr />
+<p><em>This is Part 5 of the Bayesian, Probabilistic &amp; Causal Methods track in the Algorithms in Python series, and the final article of the track. The companion script <code>causal_inference.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. Part 4 of this track covered Probabilistic Programming. The next track — Time Series &amp; Forecasting — opens with ARIMA.</em></p>

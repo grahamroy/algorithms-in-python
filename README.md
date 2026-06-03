@@ -72,7 +72,7 @@ clear explanations and Python implementations.
 | 2 | Markov Chain Monte Carlo (MCMC) | ✅ |
 | 3 | Variational Inference | ✅ |
 | 4 | Probabilistic Programming | ✅ |
-| 5 | Causal Inference | ⬜ |
+| 5 | Causal Inference | ✅ |
 
 ### 06 — Time Series & Forecasting
 | # | Algorithm | Status |
