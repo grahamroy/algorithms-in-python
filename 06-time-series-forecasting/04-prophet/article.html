@@ -1,0 +1,253 @@
+<p>ARIMA (Part 1), exponential smoothing (Part 2), and state-space
+models (Part 3) are powerful and well-understood, but they
+share a friction: tuning them well requires real time-series
+expertise. ARIMA&rsquo;s <code>(p, d, q)</code> choices, ETS&rsquo;s <code>(E, T, S)</code>
+configurations, UCM&rsquo;s component selection — each demands
+domain knowledge that most data scientists at most companies
+don&rsquo;t have time to develop for every series they need to
+forecast.</p>
+<p><strong>Prophet</strong> (Taylor &amp; Letham, Facebook, 2017) solved this
+problem by packaging a state-space-style decomposition behind
+a deliberately friendly API:</p>
+<pre><code class="language-python">from prophet import Prophet
+m = Prophet()
+m.fit(df)            # df has columns 'ds' (date) and 'y' (value)
+forecast = m.predict(future_df)
+</code></pre>
+<p>Three lines. Auto-selected trend break points, automatic
+detection of daily/weekly/yearly seasonality, optional
+holiday effects, native support for missing data and
+irregular sampling, full uncertainty intervals, and a plot
+method that produces publication-grade charts. For the
+non-time-series-specialist analyst, Prophet replaced &ldquo;spend
+two weeks learning ARIMA&rdquo; with &ldquo;fit and inspect the result&rdquo;.</p>
+<p>The internal model is roughly:</p>
+<pre><code>y(t) = trend(t) + seasonality(t) + holidays(t) + noise
+</code></pre>
+<p>with piecewise-linear or logistic-growth trend, Fourier-series
+seasonalities at multiple periods, and an indicator for each
+configured holiday. Parameters are fit by maximum a posteriori
+(or full Bayesian MCMC) via the Stan probabilistic
+programming language. The mathematics is more state-space than
+ARIMA-style, but the <em>experience</em> is closer to &ldquo;scikit-learn
+for time series&rdquo;.</p>
+<p>This article builds Prophet from first principles. We will
+walk through its three model components, describe the
+changepoint detection that handles trend changes, fit it to
+the airline-passengers dataset and compare against the
+previous three articles&rsquo; methods, then finish with the
+critique it has accumulated — Prophet is now ten years old
+and has well-known failure modes alongside its real
+strengths.</p>
+<hr />
+<h2>The model</h2>
+<p>Prophet decomposes <code>y(t)</code> into three additive (or
+multiplicative) components plus noise.</p>
+<h3>Trend</h3>
+<p>Two flavours.</p>
+<p><strong>Piecewise linear</strong> — the default, suitable for most data
+without a saturating asymptote. The model places <code>S</code>
+candidate <strong>changepoints</strong> (default 25, evenly spaced over
+the first 80% of the history) where the slope can change.
+The actual slopes between changepoints are fit by Bayesian
+inference with a sparsity-inducing Laplace prior — most
+changepoints end up with zero adjustment, and only the
+genuinely meaningful trend changes are kept.</p>
+<p><strong>Logistic growth</strong> — for series with a known capacity (web
+traffic on a planet of N people, market share, sales
+penetration into a fixed addressable market). User supplies
+the capacity <code>C</code>; Prophet fits a logistic curve whose slope
+changes at the same automatic changepoints.</p>
+<h3>Seasonality</h3>
+<p>Each seasonal period is modelled as a <strong>Fourier series</strong> —
+sums of sines and cosines at the period&rsquo;s harmonics. For
+yearly seasonality (default 10 Fourier terms), weekly (3
+terms), daily (4 terms). User can add custom seasonalities
+(monthly, quarterly, hourly).</p>
+<p>Fourier-series seasonality is more flexible than the
+single-cycle &ldquo;seasonal index&rdquo; approach of ETS or SARIMA — it
+can represent smoothly-varying seasonal shapes. It is also
+more parsimonious than dummy-coded month effects.</p>
+<h3>Holidays and custom regressors</h3>
+<p>User-provided. Pass Prophet a dataframe of holidays (date +
+event name + optional <code>lower_window</code> / <code>upper_window</code> for
+multi-day effects) and the model fits a per-holiday additive
+effect. Same for custom regressors — promotions, weather,
+anything observed.</p>
+<h3>Putting it together</h3>
+<p>The full model:</p>
+<pre><code>y(t) = g(t) + s(t) + h(t) + ε_t
+</code></pre>
+<p>where <code>g(t)</code> is the piecewise trend, <code>s(t)</code> the sum of all
+seasonalities (Fourier-series), <code>h(t)</code> the holiday effects.
+Inference is <strong>MAP estimation</strong> (default) or full <strong>MCMC via
+Stan</strong> (set <code>mcmc_samples</code> to a positive number — much
+slower, gives proper uncertainty).</p>
+<hr />
+<h2>Why is it so easy?</h2>
+<p>Three deliberate API choices set Prophet apart:</p>
+<p><strong>Sensible defaults that mostly work.</strong> The default Prophet
+fit handles most business datasets reasonably well without
+any tuning — yearly + weekly seasonality, automatic changepoint
+detection, 25 candidate changepoints, default smoothing
+priors. Compare against ARIMA where the wrong <code>(p, d, q)</code>
+gives terrible results.</p>
+<p><strong>Native handling of missing data.</strong> Prophet doesn&rsquo;t care if
+your timestamps are irregular or have gaps; the
+additive-decomposition formulation works as long as
+observations exist at any time <code>t</code>.</p>
+<p><strong>Interpretable component plots.</strong> <code>m.plot_components(forecast)</code>
+shows the trend, each seasonality, and the holiday effects as
+separate panels — instant model diagnostics without needing
+to know what to look for.</p>
+<p><strong>Forgiving of edge cases.</strong> Negative values, weird outliers,
+sudden trend changes — Prophet returns <em>something</em> sensible
+where ARIMA might silently produce garbage.</p>
+<p>The downside, predictable from these design choices:
+<strong>Prophet&rsquo;s defaults are decent, but the model is hard to
+tune for last-mile accuracy</strong>. The 2024 Hyndman critique
+showed Prophet underperforms simpler methods on many
+benchmarks. The right framing: Prophet is the
+no-effort baseline, not the production accuracy champion.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script fits Prophet on the airline-passengers
+dataset and compares against the methods from the previous
+three articles.</p>
+<pre><code>DEMO 1 --- Prophet on airline passengers
+  Fit time          : 0.45 s
+  Components fitted : trend (linear) + yearly seasonality
+  Test MAPE         : 6.61%
+  Test RMSE         : 43.07
+</code></pre>
+<pre><code>DEMO 2 --- Component decomposition
+  Estimated trend at end of training : 444.2
+  Yearly peak month: Jul
+  Yearly trough month: Nov
+</code></pre>
+<pre><code>DEMO 3 --- Side-by-side with ARIMA / SARIMA / Holt-Winters / UCM
+  Method                       AIC    Test MAPE    Test RMSE
+  -----------------     ----------   ----------   ----------
+  ARIMA(2, 1, 2)           1225.56        8.22%        55.22
+  SARIMA(...)               901.05        2.96%        17.21
+  Holt-Winters mult         633.69        2.21%        15.81
+  UCM (Part 3)             1011.43       15.77%        91.29
+  Prophet                        —        6.61%        43.07
+</code></pre>
+<p>Three observations.</p>
+<p><strong>Prophet is fast and easy.</strong> The whole fit + forecast
+pipeline runs in under a second with sensible defaults. The
+output includes the decomposition into trend + seasonality
+and uncertainty intervals — for free.</p>
+<p><strong>Prophet is mid-pack on accuracy.</strong> MAPE of 6.6% is better
+than UCM, worse than the classical methods. On this dataset
+SARIMA and Holt-Winters are clearly preferred if accuracy is
+the only goal.</p>
+<p><strong>Prophet&rsquo;s value is the workflow, not the headline number.</strong>
+On a corpus of 100 business time series where you don&rsquo;t have
+time to hand-tune each one, Prophet&rsquo;s &ldquo;one API, sensible
+defaults&rdquo; wins — even if the per-series accuracy is 1–2%
+worse than a hand-tuned SARIMA, the <em>total</em> labour saved is
+enormous.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Prophet&rsquo;s cost is dominated by Stan&rsquo;s MAP estimation:</p>
+<p><strong>MAP fitting</strong> is <code>O(L-BFGS iters · n · features)</code>. Features
+include trend coefficients (one per changepoint + base), 2 ×
+Fourier order per seasonality (10 yearly → 20 features), plus
+one per holiday. Total typically &lt;100 features.</p>
+<p><strong>Full Bayesian fitting</strong> (<code>mcmc_samples &gt; 0</code>) runs Stan&rsquo;s
+NUTS sampler, several orders of magnitude slower than MAP but
+gives proper posterior uncertainty.</p>
+<p><strong>Forecasting</strong> is <code>O(h · features)</code> — evaluate the fitted
+function at each future time step.</p>
+<p><strong>Memory</strong> is <code>O(n + features²)</code> during fitting.</p>
+<p>The Stan backend can be brittle on Windows; the alternative
+<strong>cmdstanpy</strong> backend and the <strong>NeuralProphet</strong> rewrite (which
+replaces Stan with PyTorch) address some of those issues.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p><strong>Internal forecasting at Meta.</strong> Prophet was open-sourced
+because Meta was using it at scale internally — site
+traffic, ad performance, infrastructure capacity — across
+thousands of teams. The library is still the official
+Meta forecasting tool.</p>
+<p><strong>Data-science-team default at most companies.</strong> When a
+non-time-series specialist needs to forecast something at a
+business that doesn&rsquo;t have a dedicated forecasting team,
+Prophet is the most-likely answer. Snowflake, Databricks,
+and most cloud-data-platform vendors integrate Prophet.</p>
+<p><strong>M5 forecasting competition.</strong> Prophet was a baseline that
+many top entries had to beat. Most ensembles included a
+Prophet component, even if the headline method was a
+gradient-boosted tree.</p>
+<p><strong>Capacity planning and SRE.</strong> Predicting server load,
+network traffic, queue depth — Prophet is the standard tool
+for &ldquo;I need a forecast, I don&rsquo;t want to think about it&rdquo;.</p>
+<p><strong>Marketing campaign analysis.</strong> When the business says &ldquo;what
+would the metric have done absent this launch?&rdquo;, Prophet&rsquo;s
+ability to add custom regressors and changepoints around
+launch dates makes it a natural counterfactual baseline.
+Many practitioners use Prophet inside CausalImpact-style
+workflows.</p>
+<p><strong>NeuralProphet, GreyKite, others.</strong> Prophet inspired a small
+ecosystem of &ldquo;easy forecasting libraries&rdquo; — NeuralProphet
+(PyTorch-based, more flexible), LinkedIn&rsquo;s GreyKite, Uber&rsquo;s
+Orbit, Amazon&rsquo;s GluonTS. All borrow Prophet&rsquo;s &ldquo;decompose +
+nice API&rdquo; template.</p>
+<hr />
+<h2>When NOT to use Prophet</h2>
+<p><strong>When you need accuracy more than convenience.</strong> Hand-tuned
+SARIMA or a Holt-Winters fit on the right transform usually
+beats Prophet on a single carefully-modelled series.</p>
+<p><strong>When the trend has structural breaks Prophet can&rsquo;t see.</strong>
+Default changepoints are placed in the first 80% of the
+history. If a real change happened at month 95, Prophet won&rsquo;t
+catch it unless you tell it where to look.</p>
+<p><strong>When you have many parallel related series.</strong> Prophet fits
+each series independently; global deep-learning forecasters
+(DeepAR, TFT) exploit cross-series structure.</p>
+<p><strong>When you don&rsquo;t have weekly or yearly seasonality.</strong> Prophet
+is <em>built</em> for those defaults. If your series has only an
+intra-day cycle, configure it manually or use a more general
+tool.</p>
+<p><strong>When the data is sub-hourly with multiple complex
+seasonalities.</strong> Energy demand, network traffic, financial
+tick data — TBATS or Temporal Fusion Transformer (next
+article) are better fits.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 5 of the Time Series &amp; Forecasting track is <strong>Temporal
+Fusion Transformer (TFT)</strong> — the modern deep-learning answer
+for forecasting. TFT combines: variable selection networks
+(automatic feature importance), LSTM encoders + decoders for
+local temporal structure, multi-head self-attention for
+long-range patterns, and quantile-loss outputs for calibrated
+prediction intervals. Where ARIMA, ETS, UCM, and Prophet
+each handle one series at a time, TFT trains globally across
+hundreds or thousands of related series and exploits
+shared structure.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/06-time-series-forecasting/04-prophet/prophet_demo.py"><strong>prophet_demo.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy pandas prophet statsmodels
+python prophet_demo.py
+</code></pre>
+<p>It needs <code>numpy</code>, <code>pandas</code>, <code>prophet</code>, and <code>statsmodels</code> (for
+the comparison). The script fits Prophet on the
+airline-passengers dataset, extracts the trend and seasonal
+components, and compares forecast accuracy against ARIMA,
+SARIMA, Holt-Winters multiplicative, and UCM. The headline
+insight worth pinning to the wall: <strong>Prophet wraps a
+state-space-style decomposition (piecewise trend + Fourier
+seasonality + holiday effects) in a deliberately friendly
+API; its value is the workflow — sensible defaults,
+missing-data handling, component plots — rather than headline
+accuracy; hand-tuned classical methods usually beat it on a
+single series, but Prophet wins on the cost of forecasting a
+hundred series of unknown character</strong>.</p>
+<hr />
+<p><em>This is Part 4 of the Time Series &amp; Forecasting track in the Algorithms in Python series. The companion script <code>prophet_demo.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. Part 3 of this track covered State-Space Models. Part 5 will look at Temporal Fusion Transformer — the modern deep-learning answer for forecasting at scale across many related series.</em></p>

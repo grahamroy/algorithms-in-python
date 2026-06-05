@@ -1,0 +1,295 @@
+<p>Parts 1 and 2 built ARIMA and Exponential Smoothing — the two
+historical workhorses of statistical forecasting. They look
+different on the surface: ARIMA writes the current observation
+as a linear combination of past observations and past noise;
+ETS writes recurrence equations over level, trend, and seasonal
+components. But underneath they are the <em>same kind of model</em>,
+and the abstraction that unifies them is the <strong>state-space
+form</strong>.</p>
+<p>A state-space model has two equations:</p>
+<pre><code>State transition:    x_t = A · x_{t-1} + B · u_t + w_t
+Observation:         y_t = C · x_t + D · u_t + v_t
+</code></pre>
+<p>The <strong>state</strong> <code>x_t</code> is a vector of latent variables that
+evolves over time according to a linear update with process
+noise <code>w_t</code>. The <strong>observation</strong> <code>y_t</code> is a linear function of
+the current state plus measurement noise <code>v_t</code>. Optional
+inputs <code>u_t</code> represent exogenous covariates.</p>
+<p>This abstraction subsumes ARIMA, ETS, and a long list of other
+time-series models. Set the state to &ldquo;the last <code>p</code> observations
+plus the last <code>q</code> noise terms&rdquo; and you have ARIMA. Set the
+state to &ldquo;level, trend, season&rdquo; and you have ETS. Set it to
+something custom — &ldquo;underlying trend plus a 12-period cycle
+plus a 7-day cycle plus an irregular component&rdquo; — and you have
+a <strong>structural time series</strong> model.</p>
+<p>The state-space view comes with two unique algorithmic powers:</p>
+<ul>
+<li>The <strong>Kalman filter</strong> — a recursive linear-Gaussian
+  inference procedure that gives you the posterior distribution
+  over the latent state at every time step, optimal updates as
+  new data arrives, and forecasts with calibrated uncertainty.</li>
+<li>Handling of <strong>missing data, irregular sampling, and
+  structural breaks</strong> that ARIMA and ETS struggle with by
+  default.</li>
+</ul>
+<p>This article builds state-space modelling from first principles.
+We will write down the linear-Gaussian state-space form,
+derive the Kalman filter as the optimal Bayesian update for
+the latent state, walk through the <strong>Unobserved Components
+Model (UCM)</strong> — the statsmodels formulation that decomposes a
+series into explicit trend, seasonal, and cycle components,
+fit UCM to the airline-passengers dataset, and finish with
+how ARIMA and ETS fit inside the state-space framework as
+special cases.</p>
+<hr />
+<h2>The model</h2>
+<p>A linear Gaussian state-space model is fully specified by:</p>
+<ul>
+<li><strong>State equation</strong>: <code>x_t = A · x_{t-1} + w_t</code>,
+  <code>w_t ~ N(0, Q)</code>. The state transition matrix <code>A</code> describes
+  how the latent state evolves over time; <code>Q</code> is the process
+  noise covariance.</li>
+<li><strong>Observation equation</strong>: <code>y_t = C · x_t + v_t</code>,
+  <code>v_t ~ N(0, R)</code>. The observation matrix <code>C</code> projects the
+  latent state to what we measure; <code>R</code> is the measurement
+  noise covariance.</li>
+</ul>
+<p>Given an initial state distribution <code>x_0 ~ N(μ_0, P_0)</code>, the
+joint distribution of <code>(x_{1:T}, y_{1:T})</code> is fully determined
+by <code>(A, C, Q, R, μ_0, P_0)</code>. Choose these matrices and you
+have a specific model.</p>
+<hr />
+<h2>The Kalman filter</h2>
+<p>Given observations <code>y_{1:t}</code>, what is the posterior over the
+current state <code>x_t</code>? In a linear-Gaussian model the answer is
+itself Gaussian, and the <strong>Kalman filter</strong> computes its mean
+and covariance recursively in <code>O(d²)</code> per time step (where <code>d</code>
+is the state dimension).</p>
+<p>Two steps per observation:</p>
+<p><strong>Predict</strong> (given <code>p(x_{t-1} | y_{1:t-1}) = N(μ_{t-1}, P_{t-1})</code>):</p>
+<pre><code>μ̄_t = A · μ_{t-1}
+P̄_t = A · P_{t-1} · Aᵀ + Q
+</code></pre>
+<p><strong>Update</strong> (after observing <code>y_t</code>):</p>
+<pre><code>K_t = P̄_t · Cᵀ · (C · P̄_t · Cᵀ + R)⁻¹     # Kalman gain
+μ_t = μ̄_t + K_t · (y_t - C · μ̄_t)
+P_t = (I - K_t · C) · P̄_t
+</code></pre>
+<p>The <strong>Kalman gain</strong> <code>K_t</code> is the optimal weighting between
+prior prediction and new observation, depending on which has
+lower variance.</p>
+<p>Two related algorithms:</p>
+<ul>
+<li>The <strong>Kalman smoother</strong> runs the filter forward, then
+  refines all state estimates by combining them with future
+  observations.</li>
+<li>The <strong>EM algorithm</strong> alternates between running the smoother
+  (E-step) and re-estimating <code>(A, C, Q, R)</code> (M-step) to learn
+  unknown parameters.</li>
+</ul>
+<p>Statsmodels&rsquo; <code>KalmanFilter</code> and <code>MLEModel</code> implement both;
+PyMC, Pyro, and Stan all support state-space models with full
+Bayesian inference.</p>
+<hr />
+<h2>Unobserved Components Models</h2>
+<p>The most common state-space formulation in applied work
+decomposes a series into interpretable components:</p>
+<pre><code>y_t = level_t + trend_t + season_t + cycle_t + irregular_t
+</code></pre>
+<p>Each component has its own dynamics:</p>
+<ul>
+<li><strong>Level</strong>: <code>level_t = level_{t-1} + η_t</code> (random walk).</li>
+<li><strong>Trend</strong>: <code>trend_t = trend_{t-1} + ζ_t</code> (slope evolves
+  stochastically).</li>
+<li><strong>Season</strong>: sum of seasonal indices that integrate to zero
+  over one period, with their own noise.</li>
+<li><strong>Cycle</strong>: a damped sinusoid for non-seasonal periodic
+  effects (e.g. business cycle).</li>
+<li><strong>Irregular</strong>: white noise.</li>
+</ul>
+<p>Statsmodels&rsquo; <code>UnobservedComponents</code> lets you toggle each
+component on or off and fits everything by maximum likelihood
+via the Kalman filter. The result decomposes the observed
+series into its underlying drivers — you can plot each
+component separately, ask &ldquo;what would <code>y</code> look like with the
+seasonal stripped out?&rdquo;, and get a forecast that propagates
+each component forward according to its own dynamics.</p>
+<p>This is the model class behind most central-bank
+macroeconomic-forecasting work, the BSTS library (Bayesian
+Structural Time Series — Google&rsquo;s open-source library used in
+its CausalImpact package), and most modern
+decomposition-based business forecasting.</p>
+<hr />
+<h2>ARIMA and ETS as state-space models</h2>
+<p>The unification:</p>
+<p><strong>ARIMA in state-space form</strong>: stack the last <code>p</code> observations
+into the state, plus the last <code>q</code> noise terms. The state
+transition matrix encodes the AR coefficients; the
+observation matrix picks off the current value. With this
+representation, fitting ARIMA via the Kalman filter is
+<em>exactly</em> the maximum-likelihood estimator, and it handles
+missing observations naturally (skip the update step).</p>
+<p><strong>ETS in state-space form</strong>: state is <code>(level, trend, season_1,
+..., season_m)</code>. The transition matrix implements the recurrence
+equations from Part 2; the observation matrix is <code>[1, 1, 1,
+0, ..., 0]</code> (current level + trend + current seasonal). The
+Hyndman-Koehler-Snyder-Ord book derives the full mapping.</p>
+<p>Practical implication: <strong>statsmodels actually fits ARIMA and
+ETS via the Kalman filter under the hood</strong>. The classical
+algebraic formulations are pedagogical; the production
+implementations are state-space.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script fits an <strong>Unobserved Components Model</strong>
+to the airline-passengers dataset with local linear trend +
+trigonometric seasonality, and compares the forecast against
+ARIMA, SARIMA, and Holt-Winters from the previous two
+articles.</p>
+<pre><code>DEMO 1 --- UCM (local linear trend + seasonal) on airline data
+  Components       : local linear trend + seasonal(12) + irregular
+  Fit method       : Kalman filter MLE
+  AIC              : 1011.43
+  Test MAPE        : 15.77%
+  Test RMSE        : 91.29
+</code></pre>
+<pre><code>DEMO 2 --- Decomposition: each component plotted separately
+  Final estimated level : 425.4
+  Final estimated trend : -4.24 per month
+  Seasonal pattern peaks in: Aug; troughs in: Nov
+</code></pre>
+<pre><code>DEMO 3 --- Side-by-side with ARIMA / SARIMA / Holt-Winters
+  Method                       AIC    Test MAPE    Test RMSE
+  -----------------     ----------   ----------   ----------
+  ARIMA(2, 1, 2)           1225.56        8.22%        55.22
+  SARIMA(...)               901.05        2.96%        17.21
+  Holt-Winters mult         633.69        2.21%        15.81
+  UCM (this article)       1011.43       15.77%        91.29
+</code></pre>
+<p>Three observations.</p>
+<p><strong>The decomposition is the win, not the raw accuracy.</strong> UCM
+gives explicit estimates of the final level (425), trend
+(−4.24 passengers per month) and per-month seasonal indices —
+all extractable as separate time series. You can plot each
+component, ask &ldquo;what would the series look like without
+seasonality?&rdquo;, or run &ldquo;what if?&rdquo; scenarios on the level
+alone.</p>
+<p><strong>On this multiplicative-seasonal dataset UCM&rsquo;s
+additive decomposition fits poorly.</strong> The seasonal swing grows
+with the level, but additive seasonality assumes a constant
+amplitude. The result: a fitted trend that flips negative
+trying to compensate, and MAPE of 16% — worse than even
+plain ARIMA. The fix is to log-transform the series before
+fitting (making the multiplicative structure additive on the
+log scale), or to use a model class explicitly built for
+multiplicative seasonality (Holt-Winters multiplicative).
+This is exactly the modelling-choice trade-off the chapter
+emphasises: pick the form that matches your data.</p>
+<p><strong>The Kalman filter handles missing data for free.</strong> If
+one of the months were <code>NaN</code>, the state-space implementation
+would just skip the update step and propagate uncertainty —
+ARIMA and ETS need imputation upstream.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>State-space models trade interpretability and flexibility
+for higher per-iteration cost:</p>
+<p><strong>Kalman filter</strong> is <code>O(d²)</code> per time step where <code>d</code> is the
+state dimension. For UCM with trend (2 states) + 11 seasonal
+states the total state is small, sub-millisecond per step.</p>
+<p><strong>Full forward filter pass</strong> is <code>O(T · d²)</code>. For <code>T = 10⁴</code>
+and <code>d = 20</code> that is a few seconds.</p>
+<p><strong>Smoother</strong> is another <code>O(T · d²)</code> backward pass.</p>
+<p><strong>Maximum likelihood fitting</strong> runs the filter at every
+iteration of the optimiser — <code>O(I · T · d²)</code> total.</p>
+<p>For large state dimensions (<code>d &gt; 100</code>) the cost becomes
+appreciable; the <strong>square-root Kalman filter</strong> and
+<strong>unscented Kalman filter</strong> are numerical-stability and
+non-linear extensions used in robotics and signal processing.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p><strong>Central-bank macroeconomic forecasting.</strong> The Federal
+Reserve&rsquo;s FRB/US model, the ECB&rsquo;s models, and most national
+central banks&rsquo; forecasting pipelines are state-space
+formulations — interpretable decompositions of GDP, inflation,
+unemployment into structural components.</p>
+<p><strong>BSTS (Bayesian Structural Time Series).</strong> Google&rsquo;s
+open-source library — used in CausalImpact for measuring
+the effect of marketing campaigns and product changes — is
+built on Bayesian state-space modelling with MCMC over the
+component priors.</p>
+<p><strong>Robotics and tracking.</strong> Kalman filters are the foundational
+algorithm of robotic state estimation — sensor fusion, SLAM,
+target tracking, autonomous-vehicle perception. The state is
+&ldquo;where am I and what am I moving&rdquo;; the observation equation
+maps sensors to measurements.</p>
+<p><strong>Signal processing.</strong> GPS, radar, navigation systems —
+all use Kalman filtering for noise-reduced state estimation.
+Pre-dates time-series forecasting historically.</p>
+<p><strong>Financial econometrics.</strong> Stochastic volatility models,
+term-structure models, dynamic factor models — virtually
+every modern econometric time-series technique is a
+state-space model.</p>
+<p><strong>Epidemiology.</strong> Infectious-disease compartmental models
+(SIR, SEIR) are state-space models with the disease-state
+variables as the latent state.</p>
+<p><strong>Sensor data analysis.</strong> IoT sensors, industrial monitoring,
+seismic data — state-space models are routine.</p>
+<p>The pattern: when you need to <em>decompose</em> a time series into
+interpretable latent drivers, or when you have missing data or
+exogenous covariates with non-trivial dynamics, state-space
+is the right framework.</p>
+<hr />
+<h2>When NOT to use state-space models</h2>
+<p><strong>When you don&rsquo;t need decomposition.</strong> If you just want
+forecasts and don&rsquo;t care about understanding the trend vs
+seasonal vs cycle structure, ARIMA or ETS is faster and
+simpler.</p>
+<p><strong>When the model is genuinely non-linear.</strong> Standard
+Kalman filters assume linear-Gaussian dynamics. For
+non-linearities use the Extended or Unscented Kalman filter,
+or particle filters — substantially more complex.</p>
+<p><strong>When you have very high state dimensions.</strong> <code>O(d²)</code> per
+step becomes prohibitive past <code>d &gt; 1000</code>. Approximate
+methods (ensemble Kalman filters, variational inference)
+are needed.</p>
+<p><strong>When you have a million parallel series.</strong> Per-series UCM
+fits don&rsquo;t share information. Deep-learning sequence models
+trained globally can exploit cross-series structure that
+state-space cannot.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 4 of the Time Series &amp; Forecasting track is <strong>Prophet</strong>
+— Facebook&rsquo;s open-source forecasting library that wraps a
+state-space-style decomposition (trend + multiple
+seasonalities + holiday effects) in a friendly API designed
+for analysts who are not time-series specialists. Prophet
+gave a generation of data scientists a one-line
+<code>m.fit(df).predict(future)</code> API that beats ad-hoc Excel
+forecasts and competes with hand-tuned ARIMA on many
+business datasets.</p>
+<p>After Prophet comes the Temporal Fusion Transformer (TFT) —
+the modern deep-learning answer for forecasting at scale
+across many related series.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/06-time-series-forecasting/03-state-space-models/state_space.py"><strong>state_space.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy pandas statsmodels
+python state_space.py
+</code></pre>
+<p>It needs <code>numpy</code>, <code>pandas</code>, and <code>statsmodels</code>. The script
+fits an Unobserved Components Model with local linear trend
+and trigonometric seasonality to the airline-passengers
+dataset, decomposes the series into its latent components,
+and compares forecast accuracy against ARIMA, SARIMA, and
+Holt-Winters from the previous two articles. The headline
+insight worth pinning to the wall: <strong>state-space models
+write a time series as a linear-Gaussian latent state plus
+an observation equation; the Kalman filter does optimal
+Bayesian inference recursively in O(d²) per step; ARIMA and
+ETS are special cases of this framework, and the explicit
+decomposition makes state-space the right tool when
+interpretability matters as much as forecast accuracy</strong>.</p>
+<hr />
+<p><em>This is Part 3 of the Time Series &amp; Forecasting track in the Algorithms in Python series. The companion script <code>state_space.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. Part 2 of this track covered Exponential Smoothing. Part 4 will look at Prophet — Facebook&rsquo;s automatic forecasting library that wraps a state-space-style decomposition in a friendly API.</em></p>

@@ -1,0 +1,269 @@
+<p>The four previous articles in this track built classical
+statistical forecasters — ARIMA, exponential smoothing,
+state-space models, and Prophet. Each fits <em>one series at a
+time</em>. None of them learn from related series, none scale to
+hundreds of thousands of products, and none handle complex
+exogenous covariates (weather, promotions, calendar events,
+nested category hierarchies) without significant manual
+feature engineering.</p>
+<p><strong>Temporal Fusion Transformer (TFT)</strong> (Lim et al, Google
+Research, 2019) is the modern deep-learning answer. It is a
+single neural network architecture that:</p>
+<ul>
+<li>Trains <em>globally</em> across hundreds or thousands of related
+  series, sharing parameters and exploiting cross-series
+  structure that per-series fits cannot see.</li>
+<li>Combines an LSTM encoder for local temporal patterns with
+  multi-head self-attention for long-range dependencies.</li>
+<li>Includes a <strong>variable selection network</strong> that learns which
+  features matter for each series, providing interpretable
+  feature importance.</li>
+<li>Outputs <strong>quantiles</strong> rather than point forecasts —
+  calibrated prediction intervals are a first-class output.</li>
+<li>Handles <em>static</em> (per-series) covariates, <em>known future</em>
+  covariates (calendar, scheduled promotions), and <em>observed
+  past</em> covariates (weather, sales) separately with
+  appropriate gating.</li>
+</ul>
+<p>On the M5 Walmart-sales forecasting competition (2020), the
+winning entries were gradient-boosted trees, but the top
+deep-learning approaches were all variants of TFT or its
+contemporaries (DeepAR, N-BEATS). The 2023 Nixtla-led
+&ldquo;NeuralForecast&rdquo; benchmark study showed TFT and its
+descendants matching or beating classical methods on the
+majority of business forecasting tasks once <code>n_series &gt; 100</code>.</p>
+<p>This article builds TFT from first principles. We will walk
+through the architecture — variable selection, LSTM encoder,
+self-attention, quantile output — describe what each piece
+does and why, implement a <em>simplified</em> version (an LSTM
+sequence-to-one forecaster, the core TFT pattern stripped of
+the variable-selection and gating machinery) on the
+airline-passengers dataset, and finish with the trade-offs and when
+to reach for TFT vs. the classical methods from earlier in
+this track.</p>
+<hr />
+<h2>The architecture, end to end</h2>
+<p>A real TFT is dense — the original paper&rsquo;s diagram fills a
+page. The key conceptual blocks:</p>
+<h3>Variable Selection Networks (VSN)</h3>
+<p>For each time step the model sees many features: the lagged
+target value, calendar variables (hour, day-of-week, month),
+known future covariates (planned promotions), observed past
+covariates (weather), static per-series covariates (store
+ID, category). The VSN learns per-feature gating weights —
+&ldquo;how much does each input matter at this time step for this
+series?&rdquo; — producing an interpretable feature-importance
+score as a side product.</p>
+<h3>LSTM encoder-decoder</h3>
+<p>The historical window goes into an LSTM encoder; the LSTM&rsquo;s
+final hidden state is the <em>context</em> for the decoder, which
+unrolls forecasts step by step. The LSTM captures local
+temporal patterns (today&rsquo;s value depends on the last few
+days).</p>
+<h3>Multi-head self-attention</h3>
+<p>After the LSTM, a multi-head attention layer lets the model
+look across all time steps in the input window. This captures
+long-range patterns (a promotion last year affects sales
+this year; the lockdown three years ago has lingering
+effects on the level). Attention also produces an
+interpretable attention-weight pattern showing <em>when</em> in the
+history matters most.</p>
+<h3>Gated Residual Networks (GRN) and Static Covariate Encoders</h3>
+<p>Throughout the architecture, gated residual networks
+(Goodfellow et al.-style gating) let the model bypass
+unnecessary computations. Static covariates (per-series
+identifiers, category) feed into separate encoders that
+condition the entire prediction.</p>
+<h3>Quantile output</h3>
+<p>The output layer produces <em>multiple quantiles</em> of the
+predictive distribution — typically the 10th, 50th, and 90th
+percentiles. The loss function is the <strong>pinball loss</strong> at
+each quantile, summed. The result: calibrated prediction
+intervals out of the box, not point estimates that someone
+later wraps in a heuristic CI.</p>
+<p>The full TFT has ~500K to 5M parameters depending on
+configuration — modest by deep-learning standards, but
+substantial compared to ARIMA&rsquo;s few coefficients.</p>
+<hr />
+<h2>Why does it beat the classical methods?</h2>
+<p>Two reasons.</p>
+<p><strong>Cross-series learning.</strong> When you have 10,000 related
+series — say, daily SKU sales for a retailer — TFT trains
+<em>one</em> model on all of them, sharing the parameters.
+Sparse-sales SKUs benefit from the patterns the model learned
+on dense-sales SKUs. SARIMA fits 10,000 separate models, none
+of which can learn from each other.</p>
+<p><strong>Rich covariate handling.</strong> Want to incorporate Black
+Friday, Easter dates, weather forecasts, in-store
+promotions, and competitor pricing? In TFT they are all just
+input features. In SARIMAX you can add exogenous regressors
+but only linearly; in Prophet you can add holidays and
+regressors but their interactions are limited; in ARIMA you
+mostly cannot at all.</p>
+<p>The downside: TFT needs <strong>lots of data</strong> (or many series),
+<strong>GPUs</strong> for reasonable training time, and a <strong>lot of
+engineering effort</strong> to feed it the right covariates and tune
+hyperparameters. The 2024 NeuralForecast benchmarks show TFT
+is <em>not</em> universally better — on small datasets it loses to
+SARIMA, on highly idiosyncratic series it loses to per-series
+fits. It wins specifically when you have many related series
+and rich features.</p>
+<hr />
+<h2>A simplified worked example</h2>
+<p>A full TFT implementation is hundreds of lines of PyTorch.
+The companion script implements a <em>minimal</em> deep-learning
+forecaster — a single-layer LSTM encoder followed by a linear
+output — trained on a sliding-window representation of the
+airline-passengers dataset. The simplification preserves the
+core &ldquo;global model on lagged windows&rdquo; pattern while removing
+the gating, attention, and variable-selection machinery that
+distinguishes TFT.</p>
+<pre><code>DEMO 1 --- Simplified LSTM forecaster on airline passengers
+  Architecture     : input(1) → LSTM(hidden=32) → Linear → output
+  Loss             : MSE on next-step prediction
+  Epochs           : 500
+  Window size      : 12 (one year of history per prediction)
+  Wall time (CPU)  : 2.4 s
+  Test MAPE        : 9.01%
+  Test RMSE        : 64.25
+</code></pre>
+<pre><code>DEMO 2 --- Side-by-side with the rest of the track
+  Method                       AIC    Test MAPE    Test RMSE
+  -----------------     ----------   ----------   ----------
+  ARIMA(2, 1, 2)           1225.56        8.22%        55.22
+  SARIMA(...)               901.05        2.96%        17.21
+  Holt-Winters mult         633.69        2.21%        15.81
+  UCM (Part 3)             1011.43       15.77%        91.29
+  Prophet (Part 4)               —        6.61%        43.07
+  Simplified LSTM                —        9.01%        64.25
+</code></pre>
+<p>Three observations.</p>
+<p><strong>The simplified LSTM is mid-pack on this small single-series
+dataset</strong> — MAPE 9.0%, slightly worse than plain ARIMA and
+considerably worse than SARIMA or Holt-Winters. Deep
+learning&rsquo;s advantage isn&rsquo;t visible on one short series. On
+the M4 / M5 benchmarks with thousands of related series, the
+ranking inverts.</p>
+<p><strong>Where TFT would win.</strong> Imagine 10,000 SKUs of monthly sales
+data: SARIMA / Holt-Winters fits 10,000 separate models, each
+on a tiny history; TFT fits one model on all of them and
+shares strength across series. On the M5 competition such
+shared learning produced 5–15% MAPE improvements over
+classical per-series baselines on the harder SKUs.</p>
+<p><strong>The simplified demo skips most of what makes TFT
+distinctive.</strong> Real TFT adds variable selection (per-feature
+gating), multi-head attention (long-range patterns),
+static-covariate encoders, and quantile loss. The LSTM-only demo
+captures only the &ldquo;global neural forecaster&rdquo; pattern.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>TFT is expensive but parallelisable:</p>
+<p><strong>Training</strong> is <code>O(E · n_series · n_windows · d²)</code> per epoch
+where <code>d</code> is the hidden dimension. With <code>n_series = 10⁴</code>,
+<code>n_windows = 100</code> per series, <code>d = 64</code>, and <code>E = 100</code> epochs,
+that is ~10⁹ operations per epoch — minutes on a single GPU,
+hours on CPU.</p>
+<p><strong>Inference</strong> is <code>O(window_len · d²)</code> per forecast — much
+faster than training, milliseconds on GPU.</p>
+<p><strong>Memory</strong> at training time is <code>O(batch · window · d)</code>, easily
+fits in 16 GB GPU memory for typical configurations.</p>
+<p><strong>Compare to classical methods</strong>: SARIMA on one series fits
+in seconds; SARIMA on 10,000 series fits in 10,000 × seconds
+= hours. TFT trains once globally; per-series cost is
+amortised. Below <code>n_series ≈ 100</code> classical methods are
+faster; above <code>n_series ≈ 10³</code> TFT becomes increasingly
+attractive.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p><strong>Retail forecasting at scale.</strong> Walmart, Target, Amazon
+demand-forecasting pipelines have all adopted TFT-style
+deep-learning forecasters for SKU-level forecasts. Forecast
+accuracy improvements of 5–15% translate to billions in
+inventory cost savings.</p>
+<p><strong>Energy demand forecasting.</strong> Electricity load,
+photovoltaic generation, gas demand — utilities have moved
+from ETS/SARIMA per-substation to global deep-learning
+models. TFT and its derivatives are the workhorse for
+day-ahead and hour-ahead forecasting at most major utilities
+in 2026.</p>
+<p><strong>Cloud resource forecasting.</strong> AWS, Azure, GCP all run
+internal TFT-style forecasters to predict cloud demand
+across customer / region / instance-type pairs for capacity
+planning.</p>
+<p><strong>Pharmaceutical sales forecasting.</strong> Pharma analytics teams
+have shifted from per-product SARIMAX to globally-trained
+deep-learning models, especially for new-product launches
+where shared learning across analogue products matters
+most.</p>
+<p><strong>Web traffic and CDN load balancing.</strong> Hourly request
+volumes per region per service — TFT with calendar features,
+known marketing events, and weather covariates is a typical
+production deployment.</p>
+<p><strong>Financial time-series.</strong> Deep learning has been slow to win
+in finance (efficient markets, low signal-to-noise), but TFT
+is a serious tool for option pricing, volatility forecasting,
+and order-book modelling.</p>
+<p><strong>The wider ecosystem.</strong> Beyond TFT, the deep time-series
+forecasting field has rapidly produced N-BEATS, N-HiTS,
+PatchTST, TimesFM (Google&rsquo;s pretrained foundation model for
+time series, 2024), and Chronos (Amazon&rsquo;s pretrained
+foundation model). All share the &ldquo;global neural model,
+attention-based, scaled training&rdquo; recipe. TFT is the
+representative example, not the only option.</p>
+<hr />
+<h2>When NOT to use TFT</h2>
+<p><strong>When you have one short series.</strong> Classical methods are
+faster, simpler, and as accurate. TFT needs lots of data.</p>
+<p><strong>When you don&rsquo;t have a GPU.</strong> Training is impractical on
+CPU for non-trivial models. Use a cloud GPU or stay with
+classical methods.</p>
+<p><strong>When interpretability is critical.</strong> TFT has <em>some</em>
+interpretability via VSN and attention weights, but it is no
+match for ARIMA&rsquo;s coefficients or UCM&rsquo;s component
+decomposition. For regulated domains, classical methods are
+often required.</p>
+<p><strong>When you have few related series.</strong> Below <code>n_series ≈ 50</code>
+the global-training advantage doesn&rsquo;t compensate for the
+hyperparameter-tuning effort.</p>
+<p><strong>When data quality is bad.</strong> Deep learning amplifies bad
+data. Garbage-in, garbage-out applies more sharply than for
+classical methods, which have stronger inductive biases that
+sometimes paper over poor inputs.</p>
+<hr />
+<h2>What comes next</h2>
+<p>This is the final article in the <strong>Time Series &amp;
+Forecasting</strong> track. Five articles: ARIMA (the foundational
+linear method), Exponential Smoothing (the recurrence-based
+cousin), State-Space Models (the unifying formalism),
+Prophet (the friendly-API decomposition tool), and TFT (the
+deep-learning answer at scale).</p>
+<p>The next track is <strong>Recommender Systems</strong>, opening with
+Matrix Factorisation (SVD / ALS) — the classical method
+behind Netflix&rsquo;s original recommendation pipeline and still
+the strong baseline for collaborative filtering. After that
+comes Neural Collaborative Filtering, Two-Tower Retrieval,
+and Sequential Recommenders.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/06-time-series-forecasting/05-temporal-fusion-transformer/tft.py"><strong>tft.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy pandas torch statsmodels
+python tft.py
+</code></pre>
+<p>It needs <code>numpy</code>, <code>pandas</code>, <code>torch</code>, and <code>statsmodels</code> (for
+the comparison row). The script implements a simplified
+LSTM-based sequence-to-one forecaster on the
+airline-passengers dataset, illustrating the core &ldquo;global
+neural forecaster&rdquo; pattern that TFT generalises. The
+headline insight worth pinning to the wall: <strong>TFT trains
+one neural network across many related time series, combines
+local LSTM patterns with global self-attention, includes
+variable selection networks for interpretable feature
+importance, outputs quantiles for calibrated uncertainty,
+and beats classical methods primarily when you have many
+related series and rich covariates — not on a single short
+benchmark series</strong>.</p>
+<hr />
+<p><em>This is Part 5 of the Time Series &amp; Forecasting track in the Algorithms in Python series, and the final article of the track. The companion script <code>tft.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. Part 4 of this track covered Prophet. The next track — Recommender Systems — opens with Matrix Factorisation.</em></p>

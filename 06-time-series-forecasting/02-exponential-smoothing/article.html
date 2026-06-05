@@ -1,0 +1,258 @@
+<p>Part 1 built ARIMA — the autoregressive-moving-average model
+that dominated time series forecasting from the 1970s into the
+2000s. ARIMA is powerful, mathematically elegant, and on
+clean stationary data after differencing it is often the best
+linear forecaster you can fit.</p>
+<p><strong>Exponential Smoothing</strong> is the parallel tradition. The
+underlying idea is older than ARIMA — Brown&rsquo;s &ldquo;exponentially
+weighted moving average&rdquo; was used in operations research in
+the 1950s — and the modern Holt-Winters formulation has been
+the production default for retail and supply-chain forecasting
+for half a century. Its appeal: a few simple recurrence
+equations, no stationarity assumption, very few
+hyperparameters, and accuracy on small-to-medium business
+data that competes with and often beats ARIMA. The M3, M4,
+and M5 forecasting competitions all featured ETS variants in
+their top-10 simple methods.</p>
+<p>The 2008 Hyndman-Koehler-Snyder-Ord book <em>Forecasting with
+Exponential Smoothing</em> unified the family into a state-space
+framework (ETS: Error, Trend, Seasonality) and put it on a
+rigorous statistical footing. The R <code>forecast</code> package and
+Python&rsquo;s <code>statsmodels.tsa.holtwinters</code> are the standard
+implementations.</p>
+<p>This article builds exponential smoothing from first
+principles. We will derive <strong>simple exponential smoothing</strong>
+(no trend, no seasonality), extend it to <strong>Holt&rsquo;s linear
+method</strong> (trend), then to <strong>Holt-Winters</strong> (trend +
+seasonality, additive or multiplicative), describe the <strong>ETS
+state-space framework</strong> that unifies them, fit several
+variants on the airline-passengers dataset, and finish with a
+side-by-side comparison against the SARIMA forecast from
+Part 1.</p>
+<hr />
+<h2>Simple exponential smoothing</h2>
+<p>The simplest case: a series with no trend, no seasonality,
+just noisy observations around a level that may drift slowly.
+The forecast is a weighted average of the previous forecast
+and the latest observation, with the weight <code>α</code> (the
+smoothing parameter, between 0 and 1) controlling how
+responsive the forecast is to new data:</p>
+<pre><code>ŷ_{t+1} = α · y_t + (1 - α) · ŷ_t
+</code></pre>
+<p>Equivalently, expanding the recurrence:</p>
+<pre><code>ŷ_{t+1} = α · y_t + α(1-α) · y_{t-1} + α(1-α)² · y_{t-2} + ...
+</code></pre>
+<p>The forecast is a weighted sum of <em>all</em> past observations,
+with exponentially decaying weights. Recent observations
+matter most; old ones fade smoothly. <code>α = 0.1</code> is very
+smooth (long memory); <code>α = 0.9</code> is very reactive (short
+memory). The smoothing parameter is typically fit by maximum
+likelihood — pick the <code>α</code> that minimises the sum of squared
+forecast errors on the training data.</p>
+<p>Simple ES is the right baseline for a level-only series like
+a sensor reading or a stable inventory count.</p>
+<hr />
+<h2>Holt&rsquo;s linear method (trend)</h2>
+<p>Add a second equation tracking the trend:</p>
+<pre><code>Level:      ℓ_t = α · y_t + (1 - α) · (ℓ_{t-1} + b_{t-1})
+Trend:      b_t = β · (ℓ_t - ℓ_{t-1}) + (1 - β) · b_{t-1}
+Forecast:   ŷ_{t+h} = ℓ_t + h · b_t
+</code></pre>
+<p>The level <code>ℓ_t</code> is the same exponentially-smoothed estimate
+as before, except adjusted by the previous trend. The trend
+<code>b_t</code> is itself exponentially smoothed, with its own
+parameter <code>β</code>. The <code>h</code>-step-ahead forecast is the current
+level plus <code>h</code> increments of the current trend.</p>
+<p>Holt&rsquo;s method handles series with a constant or slowly
+changing slope. There is a <strong>damped trend</strong> variant that
+multiplies the trend by a damping factor <code>φ &lt; 1</code> per step —
+useful when extrapolating a long-running trend indefinitely
+would be unrealistic.</p>
+<hr />
+<h2>Holt-Winters (trend + seasonality)</h2>
+<p>Add a third equation for seasonality. Two variants depending
+on whether the seasonal effect is <strong>additive</strong> (fixed
+amplitude regardless of level) or <strong>multiplicative</strong>
+(amplitude scales with level):</p>
+<pre><code># Multiplicative seasonality (level scales the season)
+Level:      ℓ_t = α · (y_t / s_{t-m}) + (1 - α) · (ℓ_{t-1} + b_{t-1})
+Trend:      b_t = β · (ℓ_t - ℓ_{t-1}) + (1 - β) · b_{t-1}
+Season:     s_t = γ · (y_t / ℓ_t) + (1 - γ) · s_{t-m}
+Forecast:   ŷ_{t+h} = (ℓ_t + h · b_t) · s_{t+h-m}
+</code></pre>
+<p><code>m</code> is the seasonal period (12 for monthly with annual
+seasonality, 7 for daily with weekly, 24 for hourly with
+daily, etc.). Three smoothing parameters now: <code>α</code>
+(level), <code>β</code> (trend), <code>γ</code> (seasonality).</p>
+<p>Multiplicative is the right choice for the airline-passengers
+dataset, where the December peak grows in absolute size as
+total passenger volume grows.</p>
+<p>Additive seasonality (just replace the
+divisions/multiplications above with subtractions/additions) is right when
+the seasonal swing stays constant regardless of level — e.g.
+electricity demand where the summer-winter difference is a
+fixed number of MWh.</p>
+<hr />
+<h2>The ETS state-space framework</h2>
+<p>Hyndman et al&rsquo;s contribution: every variant — simple ES,
+Holt, Holt-Winters, damped versions, etc. — can be expressed
+in a <strong>state-space form</strong> with three slots:</p>
+<ul>
+<li><strong>Error</strong>: additive (A) or multiplicative (M)?</li>
+<li><strong>Trend</strong>: none (N), additive (A), additive damped (Ad)?</li>
+<li><strong>Seasonality</strong>: none (N), additive (A), multiplicative (M)?</li>
+</ul>
+<p>A specific model is named <strong>ETS(E, T, S)</strong>: <code>ETS(A, N, N)</code> is
+simple exponential smoothing; <code>ETS(A, A, A)</code> is Holt-Winters
+additive; <code>ETS(M, A, M)</code> is Holt-Winters multiplicative (the
+classical airline-passengers model).</p>
+<p>The unified framework lets statsmodels&rsquo; <code>ETSModel</code> and R&rsquo;s
+<code>forecast::ets()</code> automatically pick the best <code>(E, T, S)</code>
+combination by AIC — analogous to <code>auto_arima</code> for the ARIMA
+family.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script fits several exponential smoothing
+variants on the airline-passengers dataset and compares
+against the SARIMA model from Part 1.</p>
+<pre><code>DEMO 1 --- Simple exponential smoothing
+  Smoothing parameter α : auto-fit
+  AIC               : 912.38
+  Test MAPE         : 14.25%
+  Test RMSE         : 102.98
+</code></pre>
+<pre><code>DEMO 2 --- Holt-Winters multiplicative (trend + seasonality)
+  Seasonal period   : 12
+  AIC               : 633.69
+  Test MAPE         : 2.21%
+  Test RMSE         : 15.81
+</code></pre>
+<pre><code>DEMO 3 --- ETS auto-selection across all (E, T, S) combinations
+  Best model         : ETS(M, A, M)
+  AIC                : 967.98
+  Test MAPE          : 4.28%
+  Test RMSE          : 26.06
+</code></pre>
+<pre><code>DEMO 4 --- Side-by-side with SARIMA from Part 1
+  Method                  AIC      Test MAPE    Test RMSE
+  -----------------    -------    ----------   ----------
+  Simple ES             912.38       14.25%       102.98
+  Holt-Winters mult     633.69        2.21%        15.81
+  ETS(M, A, M) auto     967.98        4.28%        26.06
+  SARIMA (Part 1)       901.05        2.96%        17.21
+</code></pre>
+<p>Three observations.</p>
+<p><strong>Simple ES is hopeless on seasonal data.</strong> Without a
+seasonal component, the forecasts ignore the annual cycle and
+the MAPE is 14% — far worse than the seasonally-aware
+variants. The first lesson of ETS: pick the right family
+member for the data.</p>
+<p><strong>Holt-Winters multiplicative actually beats SARIMA on this
+dataset.</strong> MAPE of 2.21% (vs SARIMA&rsquo;s 2.96%) and a lower
+AIC (634 vs 901) — and that on the canonical seasonal
+benchmark airline-passengers data. ETS is not always the
+runner-up; on data where the multiplicative seasonal
+structure is genuinely right, it can win outright.</p>
+<p><strong>The auto-ETS selection is interesting.</strong> AIC picked
+<code>ETS(M, A, M)</code> — multiplicative errors, additive trend,
+multiplicative seasonality — but the MAPE is worse than the
+manually-specified <code>ExponentialSmoothing(trend='add',
+seasonal='mul')</code> because the two functions in statsmodels
+differ in initialisation strategy. On most datasets they
+agree; here the manual fit happens to be slightly better. In
+production fit both and keep the lower MAPE.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>ETS is even cheaper than ARIMA:</p>
+<p><strong>Fitting</strong> is <code>O(I · n)</code> where <code>I</code> is the maximum-likelihood
+optimiser iterations. The recurrence equations are linear in
+<code>n</code>; only the smoothing parameters need to be fit.</p>
+<p><strong>Forecasting</strong> is <code>O(h)</code> — each step is a constant-time
+recurrence application.</p>
+<p><strong>Memory</strong> is <code>O(n)</code> for the data and <code>O(1)</code> for the model
+state.</p>
+<p>For sub-day data (hourly, minute-level) with multiple
+seasonalities, the <strong>TBATS</strong> extension (Trigonometric Box-Cox
+ARMA Trend Seasonal) handles up to 4 simultaneous seasonal
+periods. Cost grows with the seasonal periods but remains
+practical.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p><strong>Retail demand forecasting.</strong> Holt-Winters has been the
+default at most major retailers for SKU-level demand
+forecasting for decades. Walmart, Target, Tesco, Carrefour —
+all run hundreds of millions of ETS-style forecasts per day
+for inventory replenishment.</p>
+<p><strong>Supply chain and operations research.</strong> ETS is the textbook
+inventory-planning forecaster. Production schedules, raw
+material orders, capacity planning — all powered by
+exponential smoothing in most enterprise resource planning
+(ERP) software.</p>
+<p><strong>Web analytics.</strong> Google Analytics, Adobe Analytics, and
+most web-analytics products use ETS variants under the hood
+to compute &ldquo;expected&rdquo; baseline values and flag deviations.</p>
+<p><strong>Smart-meter forecasting.</strong> Hourly or sub-hourly electricity
+consumption — TBATS or its multi-seasonal ETS cousins handle
+the daily + weekly + yearly seasonalities.</p>
+<p><strong>Operations / SRE alerting.</strong> Datadog, New Relic, and most
+APM tools fit ETS to each tracked metric, generate confidence
+intervals, and alert when actuals fall outside the
+intervals.</p>
+<p><strong>M4 / M5 forecasting competitions.</strong> ETS is consistently
+in the top 5 simple methods. Modern ensembles often
+include ETS as a component.</p>
+<hr />
+<h2>When NOT to use exponential smoothing</h2>
+<p><strong>When you have exogenous variables you want to incorporate.</strong>
+ETS has no native support for covariates. SARIMAX or
+regression-with-ARIMA-errors are the right tools.</p>
+<p><strong>When the series has multiple complex seasonalities.</strong> TBATS
+handles a few, but for very rich multi-seasonal data (energy
+demand with daily + weekly + holiday effects + weather) you
+want Prophet (Part 4) or a deep learning approach.</p>
+<p><strong>When the underlying generative process is genuinely
+non-linear.</strong> Logistic growth, threshold effects, regime
+changes — these need Prophet&rsquo;s logistic trend, or a neural
+forecaster.</p>
+<p><strong>When you have very long history and want to leverage it.</strong>
+ETS&rsquo; exponentially-decaying memory throws away old data
+quickly. Long-context attention-based models can exploit
+patterns from years ago.</p>
+<p><strong>When forecast accuracy matters more than transparency.</strong>
+On clean tabular forecasting benchmarks deep learning often
+wins by 5–15%. ETS gives you transparency and speed at a
+small accuracy cost.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 3 of the Time Series &amp; Forecasting track is <strong>State-Space
+Models</strong> — the more general formalism that subsumes both
+ARIMA and ETS. State-space models let you decompose a series
+into latent components (trend, seasonality, noise) more
+explicitly than either ARIMA or ETS, and they handle
+irregularly-sampled data, missing observations, and structural
+changes that the two simpler families struggle with.</p>
+<p>After state-space comes Prophet (Facebook&rsquo;s automatic
+forecasting library) and the Temporal Fusion Transformer (the
+modern deep-learning answer).</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/06-time-series-forecasting/02-exponential-smoothing/exponential_smoothing.py"><strong>exponential_smoothing.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy pandas statsmodels
+python exponential_smoothing.py
+</code></pre>
+<p>It needs <code>numpy</code>, <code>pandas</code>, and <code>statsmodels</code>. The script
+fits simple exponential smoothing, Holt-Winters
+multiplicative, and ETS auto-selected models on the airline
+passengers dataset and reports MAPE / RMSE alongside the
+SARIMA reference from Part 1. The headline insight worth
+pinning to the wall: <strong>exponential smoothing replaces ARIMA&rsquo;s
+algebraic AR/MA formulation with simple recurrence equations
+over level, trend, and seasonal components; the ETS
+state-space framework unifies the family; and on many
+practical business datasets Holt-Winters and SARIMA give
+indistinguishable accuracy — fit both, pick the winner</strong>.</p>
+<hr />
+<p><em>This is Part 2 of the Time Series &amp; Forecasting track in the Algorithms in Python series. The companion script <code>exponential_smoothing.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. Part 1 of this track covered ARIMA. Part 3 will look at State-Space Models — the unifying formalism that subsumes both ARIMA and ETS.</em></p>

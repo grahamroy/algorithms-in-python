@@ -34,7 +34,7 @@ clear explanations and Python implementations.
 | 1 | Linear Regression | ✅ |
 | 2 | Logistic Regression | ✅ |
 | 3 | Naive Bayes | ✅ |
-| 4 | K-Nearest Neighbours | ⬜ |
+| 4 | K-Nearest Neighbours | ✅ |
 | 5 | Decision Trees | ✅ |
 
 ### 02 — Advanced Supervised Learning
@@ -77,11 +77,11 @@ clear explanations and Python implementations.
 ### 06 — Time Series & Forecasting
 | # | Algorithm | Status |
 |---|-----------|--------|
-| 1 | ARIMA | ⬜ |
-| 2 | Exponential Smoothing | ⬜ |
-| 3 | State-Space Models | ⬜ |
-| 4 | Prophet | ⬜ |
-| 5 | Temporal Fusion Transformer (TFT) | ⬜ |
+| 1 | ARIMA | ✅ |
+| 2 | Exponential Smoothing | ✅ |
+| 3 | State-Space Models | ✅ |
+| 4 | Prophet | ✅ |
+| 5 | Temporal Fusion Transformer (TFT) | ✅ |
 
 ### 07 — Recommender Systems
 | # | Algorithm | Status |

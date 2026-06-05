@@ -1,0 +1,262 @@
+<p>The previous track was about probabilistic inference over
+unordered observations — Bayesian posteriors, MCMC samples,
+causal effects. Time series have a structural property those
+methods ignore: <strong>the data points are ordered, and what comes
+next depends on what came before</strong>. A new track is needed.</p>
+<p>Time series forecasting answers a deceptively simple question:
+given a history <code>y_1, y_2, ..., y_t</code>, predict <code>y_{t+1},
+y_{t+2}, ..., y_{t+h}</code>. Sales, sensor readings, web traffic,
+weather, electricity demand — every business and scientific
+domain has time series and every one of them needs forecasts.
+The methods range from one-line statistical formulas to
+billion-parameter transformers, and choosing among them is the
+practitioner&rsquo;s day-job.</p>
+<p>This track opens with <strong>ARIMA</strong> — AutoRegressive Integrated
+Moving Average — the method Box and Jenkins formalised in 1970
+and the method every working forecaster still tries first. It
+is purely statistical (no machine learning, no neural nets),
+fits in seconds on any dataset, gives interpretable
+coefficients, and on stationary or near-stationary series with
+modest noise it is genuinely hard to beat. Twenty-first century
+methods (Prophet, deep-learning sequence models) win on
+specific problem shapes — multiple seasonalities, exogenous
+covariates, long contexts — but ARIMA remains the <em>baseline</em>
+that every alternative is compared against.</p>
+<p>This article builds ARIMA from first principles. We will
+decompose the algorithm into its three components, walk through
+the stationarity assumption and the differencing trick that
+deals with non-stationary series, derive the parameter-selection
+machinery (ACF, PACF, AIC/BIC), implement the whole forecasting
+pipeline using statsmodels on the canonical airline-passengers
+dataset, and finish with the seasonal variants (SARIMA, SARIMAX)
+that handle real-world periodicities.</p>
+<hr />
+<h2>The three components</h2>
+<p>ARIMA has three building blocks, each indexed by a single
+integer hyperparameter.</p>
+<h3>AR(p): autoregressive</h3>
+<p>The current value is a weighted sum of the previous <code>p</code> values
+plus noise:</p>
+<pre><code>y_t = c + φ_1 · y_{t-1} + φ_2 · y_{t-2} + ... + φ_p · y_{t-p} + ε_t
+</code></pre>
+<p>AR(1) says &ldquo;today is mostly yesterday plus noise&rdquo;. AR(2) adds
+the day before yesterday. AR(<code>p</code>) lets the model remember <code>p</code>
+lags. The <code>φ_i</code> are coefficients fit from the data.</p>
+<h3>MA(q): moving average</h3>
+<p>The current value is a weighted sum of the previous <code>q</code> <em>noise</em>
+terms plus the current noise:</p>
+<pre><code>y_t = c + ε_t + θ_1 · ε_{t-1} + θ_2 · ε_{t-2} + ... + θ_q · ε_{t-q}
+</code></pre>
+<p>Confusingly, this is <em>not</em> the same as a rolling-window average.
+MA(q) means the current value is partly explained by the past
+<code>q</code> <em>shocks</em> — surprises in the past that linger and decay.
+ARIMA always has both AR and MA components combined.</p>
+<h3>I(d): integration / differencing</h3>
+<p>The &ldquo;integrated&rdquo; part handles non-stationarity. If the raw
+series has a trend or a unit root, the model is fit on the
+<code>d</code>-th <em>difference</em> of the series:</p>
+<pre><code>∇y_t = y_t - y_{t-1}   (first difference)
+∇²y_t = ∇y_t - ∇y_{t-1}  (second difference)
+</code></pre>
+<p>Most non-stationary series become stationary after one or two
+differences. The Augmented Dickey-Fuller test is the standard
+check.</p>
+<p>The full <strong>ARIMA(p, d, q)</strong> model fits an ARMA(p, q) on the
+<code>d</code>-th difference of the series, then integrates the forecasts
+back up to the original scale.</p>
+<hr />
+<h2>Stationarity: the core assumption</h2>
+<p>ARIMA assumes the differenced series is <strong>stationary</strong> — its
+statistical properties (mean, variance, autocorrelation) don&rsquo;t
+change over time. Without stationarity the model&rsquo;s parameters
+don&rsquo;t have stable meanings and the forecasts are unreliable.</p>
+<p>Real-world series rarely look stationary at first glance:</p>
+<ul>
+<li><strong>Trend.</strong> Mean shifts over time. Fix with differencing
+  (<code>d = 1</code> or <code>2</code>) or with a deterministic trend term.</li>
+<li><strong>Seasonality.</strong> Mean cycles with a fixed period. Fix with
+  <em>seasonal</em> differencing (<code>y_t - y_{t-s}</code> where <code>s</code> is the
+  season length) — handled by the SARIMA extension.</li>
+<li><strong>Variance changes.</strong> Variance grows or shrinks over time.
+  Fix with a Box-Cox or log transformation before fitting.</li>
+</ul>
+<p>Run an ADF test on the differenced series; if <code>p &gt; 0.05</code> you
+have not differenced enough.</p>
+<hr />
+<h2>Picking p, d, q: the Box-Jenkins methodology</h2>
+<p>The classical approach:</p>
+<ol>
+<li><strong>Plot the series.</strong> Look for trend, seasonality, variance
+   changes. Apply transformations as needed.</li>
+<li><strong>Difference until stationary.</strong> Try <code>d = 0</code>, then <code>d = 1</code>,
+   then <code>d = 2</code>. Stop when ADF says stationary.</li>
+<li><strong>Look at the ACF and PACF</strong> of the differenced series:</li>
+<li><strong>ACF</strong> (autocorrelation function): correlation of the
+     series with itself at lag <code>k</code>.</li>
+<li><strong>PACF</strong> (partial autocorrelation function): correlation
+     at lag <code>k</code> after controlling for shorter lags.
+   The rule of thumb:</li>
+<li><strong>AR(p) only</strong>: PACF cuts off after lag <code>p</code>; ACF decays
+     gradually.</li>
+<li><strong>MA(q) only</strong>: ACF cuts off after lag <code>q</code>; PACF decays
+     gradually.</li>
+<li><strong>Mixed ARMA(p, q)</strong>: both decay gradually; harder to
+     read off.</li>
+<li><strong>Fit several candidate models.</strong> Compare with <strong>AIC</strong> or
+   <strong>BIC</strong> — lower is better.</li>
+<li><strong>Check residuals.</strong> They should look like white noise. If
+   not, the model is mis-specified.</li>
+</ol>
+<p>This is the traditional manual procedure. In 2026 nobody
+actually does steps 3–4 by hand: <code>pmdarima.auto_arima()</code> or
+the R <code>forecast::auto.arima()</code> function search over candidate
+<code>(p, d, q)</code> combinations and pick the best by AIC. Use the
+auto-fit; review the result.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script fits ARIMA on the <strong>airline-passengers
+dataset</strong> — monthly international airline passenger numbers
+from 1949 to 1960. It has a clear upward trend and 12-month
+seasonality, the canonical test case for the field.</p>
+<pre><code>DEMO 1 --- ARIMA(2, 1, 2) on airline passengers
+  Training set    : 132 months (Jan 1949 – Dec 1959)
+  Test set        : 12 months (Jan 1960 – Dec 1960)
+  Differencing    : d = 1 (first difference is stationary)
+  AIC             : 1225.56
+
+DEMO 2 --- 12-month forecast on held-out test set
+  Test MAPE       : 8.22%
+  Test RMSE       : 55.22
+
+DEMO 3 --- SARIMA(2, 1, 2)(1, 1, 1, 12) for seasonal awareness
+  AIC             : 901.05
+  Test MAPE       : 2.96%
+  Test RMSE       : 17.21
+</code></pre>
+<p>Three observations.</p>
+<p><strong>Plain ARIMA captures the trend but misses the seasonality.</strong>
+The 12-month forecasts follow the upward direction of the
+training data but miss the annual peak-and-trough pattern.
+Test MAPE of 8.2% is mediocre — the forecasts drift toward a
+smooth growing line instead of tracking the December-January
+peak.</p>
+<p><strong>SARIMA — adding seasonal differencing and seasonal AR/MA
+terms — gets MAPE down to 3.0%.</strong> Almost every real-world
+series has seasonality; SARIMA is the version you actually
+use. Statsmodels&rsquo; <code>SARIMAX</code> is the production API.</p>
+<p><strong>AIC drops sharply</strong> from 1226 (ARIMA) to 901 (SARIMA),
+confirming the seasonal extension is a meaningful improvement
+on the model fit — not just on the held-out metric.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>ARIMA is cheap:</p>
+<p><strong>Fitting</strong> is dominated by maximum-likelihood estimation of
+the <code>(p + q + 1)</code> parameters — <code>O(I · n · (p + q))</code> where <code>I</code>
+is the number of optimiser iterations (typically &lt;100). For
+<code>n = 10⁴</code> and small <code>(p, q)</code> that is sub-second.</p>
+<p><strong>Forecasting</strong> is <code>O(h · (p + q))</code> for an <code>h</code>-step ahead
+forecast. Microseconds in absolute terms.</p>
+<p><strong>Memory</strong> is <code>O(n + (p + q))</code> for the data and parameters.</p>
+<p><code>auto_arima</code> searches over <code>O(p_max · q_max · seasonal options)</code>
+candidate models, each requiring a fit. With reasonable bounds
+(<code>p, q ≤ 5</code>, <code>P, Q ≤ 2</code>) the search is on the order of
+hundreds of fits — still seconds total.</p>
+<p>The expensive variants are <strong>vector ARIMA</strong> (multi-series with
+cross-effects), <strong>ARFIMA</strong> (long-memory differencing), and
+<strong>GARCH</strong> extensions for changing variance — all
+polynomial-factor more expensive but the asymptotic shape is
+the same.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p>ARIMA and SARIMA are everywhere:</p>
+<p><strong>Demand forecasting.</strong> Retail SKU sales, warehouse inventory,
+electricity load, water consumption — all canonical SARIMA
+territory. Power utilities run SARIMA models on hour-level
+demand every day to plan generation. Walmart&rsquo;s classical
+inventory-replenishment models were ARIMA-based for decades.</p>
+<p><strong>Economic indicators.</strong> GDP growth, inflation, unemployment —
+the Bureau of Labor Statistics, ECB, and most central banks
+publish SARIMA-based forecasts as part of their standard
+output.</p>
+<p><strong>Pharmaceutical sales forecasting.</strong> Drug-launch revenue
+modelling, prescription-trend forecasting at major pharma —
+SARIMAX (with exogenous covariates like marketing spend) is
+the standard tool.</p>
+<p><strong>Web traffic and capacity planning.</strong> Hourly visitor counts,
+server load, CDN bandwidth — ARIMA gives quick reliable
+forecasts that feed autoscaling decisions.</p>
+<p><strong>Financial markets — modestly.</strong> Daily returns are
+notoriously hard to forecast (efficient markets), but ARIMA
+appears in volatility forecasting (GARCH variants) and in
+some macroeconomic-prediction-for-portfolio-tilting use
+cases.</p>
+<p><strong>Anomaly detection on time series.</strong> Fit ARIMA, compare new
+observations against the model&rsquo;s predictive distribution.
+Large residuals = anomalies. The basis of most
+application-monitoring tools&rsquo; &ldquo;metric just deviated from its
+baseline&rdquo; alerts.</p>
+<p><strong>Causal inference for time series.</strong> Difference-in-differences
+and synthetic-controls methods (Part 5 of the previous track)
+often use ARIMA as the counterfactual model — what would the
+series have done absent the intervention?</p>
+<p>The pattern: ARIMA is the <em>first</em> forecasting model to try.
+Beating it requires either (a) clear non-linearity, (b)
+multiple interacting seasonalities, (c) exogenous covariates
+with non-linear effects, or (d) such large data volumes that
+neural methods can train at scale.</p>
+<hr />
+<h2>When NOT to use ARIMA</h2>
+<p><strong>When the series is genuinely non-linear.</strong> Multiple
+interacting seasonalities, regime changes, threshold effects
+— ARIMA&rsquo;s linear-Gaussian assumption breaks. Try Prophet
+(Part 4) or a deep learning model.</p>
+<p><strong>When you have hundreds or thousands of related series.</strong>
+Per-series ARIMA fits don&rsquo;t share information; modern hierarchical
+or global deep-learning forecasters do. M5 forecasting
+competition (Walmart, 2020) — won by LightGBM, not ARIMA.</p>
+<p><strong>When exogenous variables have non-linear effects.</strong> SARIMAX
+handles exogenous variables linearly. Real effects (promotions,
+holidays, weather) interact in complex ways.</p>
+<p><strong>When you have very short history.</strong> ARIMA needs at least
+~50 observations to estimate parameters reliably; SARIMA with
+seasonality of 12 needs 2–3 full cycles minimum.</p>
+<p><strong>When the future fundamentally differs from the past.</strong>
+Pandemics, regulatory changes, brand-new products. No
+statistical model handles these; ARIMA is honest about its
+predictive distribution but the distribution is irrelevant
+when the data-generating process changes.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 2 of the Time Series &amp; Forecasting track is <strong>Exponential
+Smoothing</strong> — the family of methods (simple ES, Holt linear,
+Holt-Winters seasonal) that compete with ARIMA on
+small-to-medium business data. Exponential smoothing has fewer
+hyperparameters, is even simpler to fit, and on many practical
+problems beats ARIMA. The Holt-Winters method is the
+forecasting world&rsquo;s other historical workhorse.</p>
+<p>After exponential smoothing comes State-Space Models (the
+mathematical formalism that subsumes both ARIMA and ETS),
+Prophet (Facebook&rsquo;s open-source decomposition method), and
+Temporal Fusion Transformer (the modern deep-learning answer).</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/06-time-series-forecasting/01-arima/arima.py"><strong>arima.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy pandas statsmodels
+python arima.py
+</code></pre>
+<p>It needs <code>numpy</code>, <code>pandas</code>, and <code>statsmodels</code>. The script
+loads the airline passengers dataset, fits a plain
+ARIMA(2, 1, 2) and a seasonal SARIMA(2, 1, 2)(1, 1, 1, 12),
+forecasts the held-out final 12 months, and reports MAPE and
+RMSE for each. The headline insight worth pinning to the
+wall: <strong>ARIMA combines autoregression (AR), differencing (I)
+for non-stationarity, and moving-average noise terms (MA) into
+a single linear-Gaussian model; SARIMA extends it with
+seasonal versions of all three; and the combination handles a
+large fraction of business-data forecasting at the cost of
+linear-Gaussian assumptions that newer methods relax</strong>.</p>
+<hr />
+<p><em>This is Part 1 of the Time Series &amp; Forecasting track in the Algorithms in Python series. The companion script <code>arima.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. The previous track closed with Causal Inference. Part 2 will look at Exponential Smoothing — ARIMA&rsquo;s main historical competitor on small-to-medium business data.</em></p>
