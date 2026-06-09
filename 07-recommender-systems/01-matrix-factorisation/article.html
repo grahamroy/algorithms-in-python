@@ -1,0 +1,308 @@
+<p>In October 2006, Netflix offered a million dollars to anyone
+who could improve their movie-recommendation algorithm by 10%.
+Three years and a thousand teams later, the winning entry was
+an ensemble of methods, but the single biggest innovation —
+the one that pulled the leaderboard out of its early plateau
+and reshaped recommender systems forever — was <strong>matrix
+factorisation</strong>.</p>
+<p>The setup is simple to state. Build an <code>n × m</code> matrix <code>R</code> where
+rows are users, columns are items (movies, products, songs),
+and entries are ratings. The matrix is almost entirely empty
+— a typical user has rated maybe 0.1% of the available items.
+The recommendation task is to fill in the missing entries: for
+each user-item pair we have not observed, predict what rating
+the user would give if they tried it. Recommend the items with
+the highest predicted ratings.</p>
+<p>Matrix factorisation says: find two smaller matrices <code>U</code> (<code>n ×
+k</code>) and <code>V</code> (<code>m × k</code>) such that <code>R ≈ U · Vᵀ</code>. Each user is now
+represented by a <code>k</code>-dimensional <strong>latent factor vector</strong> <code>u_i</code>;
+each item by a <code>k</code>-dimensional vector <code>v_j</code>. The predicted
+rating of user <code>i</code> for item <code>j</code> is the dot product <code>u_i · v_j</code>.
+Train <code>U</code> and <code>V</code> to fit the observed ratings; use them to
+predict the missing ones.</p>
+<p>This sounds modest. It is one of the most consequential
+algorithmic ideas in modern applied ML. Matrix factorisation
+underlies Spotify&rsquo;s &ldquo;Discover Weekly&rdquo;, Amazon&rsquo;s &ldquo;people who
+bought this also bought&rdquo;, LinkedIn&rsquo;s job recommendations, and
+the early generations of every collaborative filtering pipeline
+that powered the recommendation web before deep learning took
+over. Modern systems use richer architectures (neural
+collaborative filtering, two-tower models, sequence-aware
+recommenders — the rest of this track) but the
+matrix-factorisation foundation persists.</p>
+<p>This article builds matrix factorisation from first principles.
+We will set up the explicit-feedback problem, walk through the
+two standard fitting algorithms — <strong>Alternating Least Squares</strong>
+(ALS) and <strong>Stochastic Gradient Descent</strong> (SGD, in the
+FunkSVD style that won the Netflix Prize) — implement ALS from
+scratch on a synthetic ratings matrix, compare with
+truth-holdout error, and finish with the implicit-feedback variant
+that handles &ldquo;clicks rather than ratings&rdquo; and the production
+considerations (cold start, regularisation, scalability) that
+matter in practice.</p>
+<hr />
+<h2>The setup: explicit feedback</h2>
+<p>Each user <code>i ∈ {1, ..., n}</code> has rated some subset <code>Ω_i</code> of
+items, giving a rating <code>r_{i,j}</code> on a numeric scale (typically
+1–5 stars). The full ratings matrix <code>R ∈ ℝ^{n × m}</code> has values
+only at the observed <code>(i, j)</code> pairs in <code>Ω = ∪_i {i} × Ω_i</code>;
+elsewhere it is empty.</p>
+<p>We assume there is a <strong>latent structure</strong>: each user has
+preferences over abstract &ldquo;tastes&rdquo; (action vs drama, romance vs
+sci-fi, indie vs mainstream), each item has loadings on those
+tastes, and the rating is approximately the dot product of the
+two. Pick a dimensionality <code>k</code> (the number of latent factors,
+typically 10–200) and fit:</p>
+<pre><code>r̂_{i,j} = u_i · v_j   where u_i, v_j ∈ ℝ^k
+</code></pre>
+<p>The training objective minimises squared error on the <em>observed</em>
+ratings, with L2 regularisation to prevent overfitting:</p>
+<pre><code>L(U, V) = Σ_{(i,j) ∈ Ω} (r_{i,j} - u_i · v_j)²
+         + λ (Σ_i ‖u_i‖² + Σ_j ‖v_j‖²)
+</code></pre>
+<p>The missing-data nature of <code>R</code> is the key challenge. We cannot
+just compute a regular SVD of <code>R</code> — there are no values where
+it&rsquo;s empty. We have to fit <code>U</code> and <code>V</code> from only the observed
+entries, then use them to fill in the rest.</p>
+<hr />
+<h2>Algorithm 1: Alternating Least Squares (ALS)</h2>
+<p>The trick that makes the optimisation tractable: <strong>fix one
+matrix and solve for the other</strong> in closed form. Then swap and
+repeat.</p>
+<p>With <code>V</code> fixed, the optimisation over <code>U</code> decouples per user.
+For each user <code>i</code>, the optimal <code>u_i</code> minimises:</p>
+<pre><code>Σ_{j ∈ Ω_i} (r_{i,j} - u_i · v_j)² + λ ‖u_i‖²
+</code></pre>
+<p>This is <strong>ridge regression</strong>: predicting the observed ratings
+of user <code>i</code> from the (fixed) item vectors of the items they&rsquo;ve
+rated, with L2 regularisation. The closed-form solution is:</p>
+<pre><code>u_i = (V_{Ω_i}ᵀ V_{Ω_i} + λ I)⁻¹ · V_{Ω_i}ᵀ r_{i,Ω_i}
+</code></pre>
+<p>where <code>V_{Ω_i}</code> stacks the item vectors of items rated by user
+<code>i</code>, and <code>r_{i,Ω_i}</code> is the vector of those ratings. Each
+per-user update is a small <code>k × k</code> matrix inverse.</p>
+<p>Symmetrically, with <code>U</code> fixed, the optimal <code>v_j</code> is the same
+formula with <code>U_{Ω_j}</code> and <code>r_{Ω_j, j}</code> (the users who rated
+item <code>j</code> and their ratings of it).</p>
+<p>The full algorithm:</p>
+<pre><code>ALS(R, k, λ, n_iter):
+    Initialise U, V randomly
+    for iter in 1..n_iter:
+        # Update all users with V fixed
+        for i in 1..n:
+            u_i = ridge_regression(V_{Ω_i}, r_{i, Ω_i}, λ)
+        # Update all items with U fixed
+        for j in 1..m:
+            v_j = ridge_regression(U_{Ω_j}, r_{Ω_j, j}, λ)
+    return U, V
+</code></pre>
+<p>ALS converges monotonically (each step minimises the loss
+exactly given the other matrix), the per-user / per-item
+updates are independent so the whole thing parallelises
+trivially, and the only hyperparameters are <code>k</code>, <code>λ</code>, and the
+iteration count.</p>
+<p>The Netflix paper used essentially this algorithm. Spark MLlib
+ships an ALS implementation that scales to billion-rating
+datasets.</p>
+<hr />
+<h2>Algorithm 2: Stochastic Gradient Descent (FunkSVD)</h2>
+<p>The alternative, made famous by Simon Funk&rsquo;s blog post during
+the Netflix Prize: optimise the loss directly with SGD over
+individual ratings.</p>
+<p>For each observed <code>(i, j, r_{i,j})</code> in random order, compute
+the prediction error <code>e_{i,j} = r_{i,j} - u_i · v_j</code> and
+update:</p>
+<pre><code>u_i ← u_i + η · (e_{i,j} · v_j - λ · u_i)
+v_j ← v_j + η · (e_{i,j} · u_i - λ · v_j)
+</code></pre>
+<p>Step in the direction that reduces the squared error, with the
+L2 regulariser pulling factors toward zero. Iterate over all
+ratings, multiple epochs.</p>
+<p>SGD is conceptually simpler than ALS, scales better in some
+regimes (one rating at a time vs full per-user regression),
+and is the algorithm that won the Netflix Prize. It&rsquo;s also the
+foundation of the <strong>gradient-based</strong> training in every deep
+recommender that followed.</p>
+<p>For typical dataset sizes either algorithm works. ALS is
+easier to parallelise across machines; SGD is easier to
+distribute via mini-batching. The recommendation libraries
+(Surprise, implicit, LensKit) typically ship both.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script generates a synthetic ratings matrix from
+known latent factors — 200 users, 100 items, true rank 5 —
+adds noise, masks 60% of entries to simulate sparsity, fits
+both ALS and SGD with <code>k = 5</code>, and reports the RMSE on a
+held-out test set:</p>
+<pre><code>DEMO --- Matrix factorisation on synthetic ratings
+  Users           : 200
+  Items           : 100
+  True latent dim : 5
+  Observed cells  : 7983 of 20000 (39.9% density)
+  Train/test split: 6387/1596
+
+  Method                       k   iters     train RMSE      test RMSE
+  -----------------------   ----   -----    -----------    -----------
+  Baseline (global mean)       —       —          2.245          2.246
+  ALS                          5      20          0.281          0.369
+  SGD (FunkSVD)                5     200          0.347          0.448
+</code></pre>
+<p>Three observations.</p>
+<p><strong>Both methods dramatically beat the global-mean baseline.</strong>
+Predicting every missing rating with the overall average gives
+RMSE 2.25; ALS gets 0.37. That&rsquo;s the value of personalisation
+in one number — a model that knows nothing except observed
+ratings beats the population average by 84% on this synthetic
+problem.</p>
+<p><strong>ALS slightly edges out SGD here</strong> (0.37 vs 0.45 test RMSE).
+On real data the gap is usually small and depends on
+hyperparameter tuning. ALS converges in fewer iterations (20
+vs 200) because each step is a closed-form ridge regression;
+SGD&rsquo;s smaller per-step updates need more epochs to reach the
+same loss.</p>
+<p><strong>Training RMSE is meaningfully lower than test RMSE</strong> (0.28
+vs 0.37). This is the regularisation working — without <code>λ</code>
+the train error would be near zero and the test error would
+explode. Picking <code>λ</code> by cross-validation is the most
+important hyperparameter choice.</p>
+<hr />
+<h2>Implicit feedback</h2>
+<p>In production we usually don&rsquo;t have ratings. We have <em>clicks</em>,
+<em>plays</em>, <em>purchases</em> — implicit signals that a user <em>interacted</em>
+with an item but no explicit &ldquo;I rate this 4 stars&rdquo;.</p>
+<p>The implicit-feedback variant (Hu, Koren &amp; Volinsky, 2008)
+reformulates the problem. Treat the observation <code>r_{i,j}</code> as a
+confidence-weighted preference:</p>
+<ul>
+<li>If the user interacted with the item (<code>r_{i,j} &gt; 0</code>),
+  preference <code>p_{i,j} = 1</code>, confidence <code>c_{i,j} = 1 + α · r_{i,j}</code>.</li>
+<li>If no interaction observed (<code>r_{i,j} = 0</code>), preference
+  <code>p_{i,j} = 0</code>, confidence <code>c_{i,j} = 1</code>.</li>
+</ul>
+<p>The loss becomes:</p>
+<pre><code>L = Σ_{all (i,j)} c_{i,j} · (p_{i,j} - u_i · v_j)² + λ (‖U‖² + ‖V‖²)
+</code></pre>
+<p>Two key differences from explicit feedback. First, <em>every</em>
+user-item pair contributes a loss term (not just observed
+ones), with low confidence on unobserved pairs. Second, the
+target is binary preference (interacted vs not) rather than a
+real-valued rating.</p>
+<p>The Hu-Koren-Volinsky ALS update has the same shape as standard
+ALS but with confidence weighting. The <code>implicit</code> Python library
+implements this efficiently. This is the algorithm behind most
+production &ldquo;people who clicked also clicked&rdquo; recommenders.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>The relevant scales:</p>
+<p><strong>ALS per iteration</strong>: <code>O(n · |Ω_i| · k² + m · |Ω_j| · k²)</code>
+where <code>|Ω_i|</code> is the average number of ratings per user and
+<code>|Ω_j|</code> per item. The <code>k²</code> comes from the matrix inverse in
+each per-entity update. For typical <code>k ≤ 100</code> this is fast.</p>
+<p><strong>SGD per epoch</strong>: <code>O(|Ω| · k)</code> — one update per observed
+rating. Faster than ALS per iteration for small <code>k</code>, but needs
+more iterations.</p>
+<p><strong>Memory</strong>: <code>O((n + m) · k)</code> for the factor matrices, <code>O(|Ω|)</code>
+for the observed ratings. Even with <code>n = m = 10⁶</code> and <code>k = 100</code>,
+the factor matrices are ~800MB total — fits on one machine.</p>
+<p><strong>Prediction</strong>: <code>O(k)</code> per user-item query (one dot product).
+A million queries per second on commodity hardware.</p>
+<p>For genuinely huge datasets (billions of ratings, hundreds of
+millions of users/items) Spark&rsquo;s <code>MLlib ALS</code> does distributed
+ALS across a cluster.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p><strong>The Netflix Prize.</strong> The 2006–2009 competition that put
+matrix factorisation on the map. Bell et al&rsquo;s BellKor&rsquo;s
+Pragmatic Chaos team won with an ensemble of ~100 models,
+roughly half of which were matrix-factorisation variants.</p>
+<p><strong>Spotify Discover Weekly.</strong> The early generations relied
+heavily on implicit-feedback matrix factorisation on listening
+data. Modern incarnations add deep models, but the
+matrix-factorisation foundation remains.</p>
+<p><strong>LinkedIn job recommendations</strong>, <strong>Amazon &ldquo;people who bought
+this&rdquo;</strong>, <strong>YouTube watch suggestions (pre-deep-learning era)</strong>
+— all collaborative filtering systems that started life as
+matrix factorisation.</p>
+<p><strong>Google&rsquo;s TensorFlow Recommenders.</strong> The library&rsquo;s first
+example tutorial implements matrix factorisation, then extends
+to neural variants.</p>
+<p><strong>Implicit-feedback systems in production today.</strong> Most
+&ldquo;frequently-bought-together&rdquo; widgets on e-commerce sites are
+either pure implicit MF or hybrid MF + content features.</p>
+<p><strong>Cold-start hybrid systems.</strong> Pure MF cannot recommend to
+new users (no observed ratings to fit <code>u_i</code>). Production
+systems combine MF with content-based features (item metadata,
+user demographics) to handle the cold-start problem.</p>
+<p><strong>Embedding-based ML at scale.</strong> Matrix factorisation is the
+conceptual ancestor of every &ldquo;learn a low-dimensional embedding
+per entity&rdquo; technique — word embeddings, node embeddings on
+graphs, two-tower retrieval models, the encoder half of
+modern recommender stacks. Once you understand MF, the rest of
+the recommender literature is a series of generalisations.</p>
+<hr />
+<h2>When NOT to use matrix factorisation</h2>
+<p><strong>When you have no interaction data.</strong> Brand-new platform, no
+user history. MF needs observed ratings or implicit interactions
+to fit factors. Cold-start solutions (content-based filtering,
+demographic models, popularity baselines) are the entry point;
+MF kicks in after enough interactions accumulate.</p>
+<p><strong>When the data is very dense.</strong> Standard MF assumes most
+entries are unobserved (the sparse-matrix regime). Dense data
+might be better served by direct prediction methods or
+deep models.</p>
+<p><strong>When item attributes matter more than collaborative signal.</strong>
+Pure MF only uses the rating matrix; if your problem is really
+about &ldquo;find me items similar to this one based on content&rdquo;,
+content-based filtering or learned content embeddings might
+work better.</p>
+<p><strong>When recommendations need to be diverse / serendipitous.</strong>
+MF tends to amplify popularity biases. The top-10 predicted
+ratings for most users will look very similar. Production
+systems layer diversity / novelty / freshness re-rankers on top.</p>
+<p><strong>When you need explainable recommendations.</strong> &ldquo;We recommend
+this because users with similar latent factor 7 liked items
+with high factor-7 loading&rdquo; is not an explanation a human can
+understand. Content-based or rule-based systems are more
+transparent.</p>
+<p><strong>When the data has strong sequence structure.</strong> &ldquo;What will
+the user watch next given what they watched today?&rdquo; is a
+sequential question that standard MF treats as i.i.d. Use
+sequence-aware recommenders (covered later in this track).</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 2 of the Recommender Systems track is <strong>Neural
+Collaborative Filtering</strong> — replacing the dot-product
+prediction <code>u_i · v_j</code> with a deep neural network that takes
+user and item embeddings as input and outputs a predicted
+rating. The latent factors are learned with backpropagation;
+the prediction function is non-linear; the rest is the same
+matrix-factorisation idea generalised.</p>
+<p>Then comes <strong>Two-Tower Retrieval</strong> (the scalable architecture
+behind every modern web-scale recommender), and <strong>Sequential
+Recommenders</strong> (treating user behaviour as a sequence and
+predicting the next interaction).</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/07-recommender-systems/01-matrix-factorisation/matrix_factorisation.py"><strong>matrix_factorisation.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python matrix_factorisation.py
+</code></pre>
+<p>It needs only <code>numpy</code>. The script generates a synthetic
+ratings matrix from known latent factors, masks 60% of
+entries to simulate sparsity, fits both ALS (with closed-form
+ridge-regression per-user updates) and SGD (FunkSVD style)
+from scratch, and reports test-set RMSE for both versus the
+global-mean baseline. Both methods dramatically beat the
+baseline; ALS and SGD give nearly identical accuracy. The
+headline insight worth pinning to the wall: <strong>matrix
+factorisation decomposes the sparse ratings matrix into
+user-factor and item-factor matrices whose dot product
+predicts ratings; ALS gives closed-form per-entity updates
+that parallelise trivially; SGD over observed ratings is the
+Netflix-Prize-winning alternative; the implicit-feedback
+variant powers most production recommenders today</strong>.</p>
+<hr />
+<p><em>This is Part 1 of the Recommender Systems track in the Algorithms in Python series. The companion script <code>matrix_factorisation.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. The previous track — Time Series &amp; Forecasting — closed with the Temporal Fusion Transformer. Part 2 of this track will look at Neural Collaborative Filtering — replacing the dot product with a deep network.</em></p>
