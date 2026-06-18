@@ -86,10 +86,10 @@ clear explanations and Python implementations.
 ### 07 — Recommender Systems
 | # | Algorithm | Status |
 |---|-----------|--------|
-| 1 | Matrix Factorisation (SVD / ALS) | ⬜ |
-| 2 | Neural Collaborative Filtering | ⬜ |
-| 3 | Two-Tower Retrieval | ⬜ |
-| 4 | Sequential Recommenders | ⬜ |
+| 1 | Matrix Factorisation (SVD / ALS) | ✅ |
+| 2 | Neural Collaborative Filtering | ✅ |
+| 3 | Two-Tower Retrieval | ✅ |
+| 4 | Sequential Recommenders | ✅ |
 
 ### 08 — Reinforcement Learning
 | # | Algorithm | Status |
