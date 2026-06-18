@@ -51,8 +51,8 @@ predicate is a **relation** that connects them — `born_in`,
 (Polonium, named_after, Poland)
 ```
 
-That is the entire data model. Stack a few hundred million of these and
-you have **Wikidata**. Stack a few billion and you have Google's
+That is the entire data model. Stack several billion of these and
+you have **Wikidata**. Stack tens of billions and you have Google's
 Knowledge Graph or the Knowledge Vault that backs it.
 
 Drawn as a graph, the triples above look like:
@@ -365,7 +365,7 @@ the patterns to do the most selective one first, exactly as a
 relational planner would.
 
 Embedding training is O(epochs × triples × dim). For the toy KG in
-the companion script with 30 triples, dim 8, and 200 epochs, that is
+the companion script with 35 triples, dim 8, and 200 epochs, that is
 ~50,000 vector operations — under a second.
 
 ---
@@ -498,7 +498,7 @@ It finishes in under a second on a laptop. The companion script
 builds a tiny KG of scientists, runs 1-hop and 2-hop pattern queries
 against it, and trains TransE embeddings on the same data — showing
 that after 200 epochs, *Marie Curie + born_in* lands closer to
-*Warsaw* than to any of the other forty entities in the graph. That
+*Warsaw* than to any of the other 28 entities in the graph. That
 is the whole geometric punchline of KG embeddings, demonstrated
 against an actual training loop in pure Python.
 

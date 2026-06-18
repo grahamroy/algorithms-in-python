@@ -141,8 +141,8 @@ at 0.1% density (2.5 million non-zeros) against the dense
 equivalent and shows where sparse wins:
 
 ```
-Large benchmark: 50,000 x 50,000 matrix, 0.1% density (2.5M nnz)
-  Dense storage  :   19,073.49 MB  (would not fit -- skipped)
+Large benchmark: 50,000 x 50,000 matrix, 0.1% density (2,498,787 nnz)
+  Dense storage  :   19,073.49 MB  (would not fit in benchmark; skipped)
   Sparse storage :       28.79 MB
   Sparse SpMV    :        3.38 ms
 

@@ -207,8 +207,8 @@ r2 = r2_score(y_test, y_pred)
 better, but the number is hard to interpret on its own because it is in squared units.
 
 **Root Mean Squared Error (RMSE)** is the square root of MSE — it is in the same units
-as y, making it easier to understand. An RMSE of 1.05 means the model's predictions
-are off by about 1.05 units on average.
+as y, making it easier to understand. An RMSE of 0.81 means the model's predictions
+are off by about 0.81 units on average.
 
 **R² Score** is the proportion of variance in y that the model explains. An R² of 0.89
 means the model captures 89% of the variation in the data. The remaining 11% is noise

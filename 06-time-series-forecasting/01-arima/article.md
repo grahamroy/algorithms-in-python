@@ -72,7 +72,9 @@ y_t = c + ε_t + θ_1 · ε_{t-1} + θ_2 · ε_{t-2} + ... + θ_q · ε_{t-q}
 Confusingly, this is *not* the same as a rolling-window average.
 MA(q) means the current value is partly explained by the past
 `q` *shocks* — surprises in the past that linger and decay.
-ARIMA always has both AR and MA components combined.
+An ARIMA model can combine both, but either order may be zero —
+an ARIMA(0,1,1) is pure MA on the differenced series, an
+ARIMA(2,1,0) pure AR.
 
 ### I(d): integration / differencing
 

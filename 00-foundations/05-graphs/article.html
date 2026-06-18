@@ -1,13 +1,13 @@
-<p>Open Wikipedia, type "Kevin Bacon" into the search bar, and pick any other article
+<p>Open Wikipedia, type &ldquo;Kevin Bacon&rdquo; into the search bar, and pick any other article
 you like. Now try to navigate from Kevin Bacon to that article using only the
 blue links inside each page. Almost every time, you can do it in fewer than six
-clicks. Kevin Bacon links to "Six Degrees of Kevin Bacon", which links to "Graph
-theory", which links to "Quantum mechanics". Four hops. You have just performed a
+clicks. Kevin Bacon links to &ldquo;Six Degrees of Kevin Bacon&rdquo;, which links to &ldquo;Graph
+theory&rdquo;, which links to &ldquo;Quantum mechanics&rdquo;. Three hops. You have just performed a
 breadth-first search across a graph with roughly seven million nodes.</p>
 <p>Whenever a problem involves <em>things that are connected to other things</em>, you are
 looking at a graph. Social networks, road maps, molecular structures, the web,
 the call graph of a program, the attention pattern of a transformer, the citation
-network of scientific papers --- all graphs. The data structure we introduce in
+network of scientific papers &mdash; all graphs. The data structure we introduce in
 this article is the single most versatile tool in computer science, and it
 underpins a huge slice of modern AI.</p>
 <p>In the first four parts of this series we stored data in contiguous memory
@@ -29,7 +29,7 @@ be connected?</p>
 any vertex and walk along edges to reach others. Three axes of variation
 determine what kind of graph you are dealing with.</p>
 <p><strong>Directed vs undirected.</strong> In an undirected graph, an edge between <code>A</code> and <code>B</code>
-has no direction --- Facebook friendship is symmetric. In a directed graph
+has no direction &mdash; Facebook friendship is symmetric. In a directed graph
 (digraph), edges have a head and a tail. Twitter follows, citation networks, and
 the web itself are directed.</p>
 <p><strong>Weighted vs unweighted.</strong> A weighted edge carries a number: a distance, a cost,
@@ -37,7 +37,7 @@ a probability, a similarity score. Road networks carry distances. The attention
 matrix inside a transformer is, in one reading, a weighted directed graph whose
 weights are attention probabilities.</p>
 <p><strong>Cyclic vs acyclic.</strong> A cycle is a path that starts and ends at the same vertex
-without repeating edges. A directed acyclic graph --- a DAG --- has special
+without repeating edges. A directed acyclic graph &mdash; a DAG &mdash; has special
 importance in computing: build systems, task schedulers, and the computation
 graphs of PyTorch and TensorFlow are all DAGs.</p>
 <hr />
@@ -72,7 +72,7 @@ proportion to the number of edges you actually have.</p>
 <p>An <strong>adjacency matrix</strong> is a two-dimensional array of shape <code>(|V|, |V|)</code> where
 <code>M[i][j] = 1</code> if there is an edge from vertex <code>i</code> to vertex <code>j</code>, and <code>0</code>
 otherwise. For a weighted graph, <code>M[i][j]</code> holds the weight. This is a matrix
---- the same data structure from Part 2 --- pressed into service as a
+&mdash; the same data structure from Part 2 &mdash; pressed into service as a
 connectivity table.</p>
 <pre><code class="language-python"># A 4-vertex graph encoded as an adjacency matrix
 M = [[0, 1, 1, 0],
@@ -123,11 +123,11 @@ M = [[0, 1, 1, 0],
 </tbody>
 </table>
 <p>The matrix gives constant-time edge lookup but pays quadratic space. The list is
-linear in edges but slower to answer "is there an edge between these two
-vertices".</p>
+linear in edges but slower to answer &ldquo;is there an edge between these two
+vertices&rdquo;.</p>
 <p>The choice depends on density. A graph with <code>V</code> vertices has at most <code>V(V-1)/2</code>
 undirected edges; if it has close to that many, it is <strong>dense</strong> and the matrix
-wins. If it has far fewer --- which is almost always the case in practice --- it
+wins. If it has far fewer &mdash; which is almost always the case in practice &mdash; it
 is <strong>sparse</strong> and the adjacency list wins by a mile. A Facebook user has a few
 hundred friends, not several billion. A paper cites a few dozen others, not the
 entire corpus. Every serious graph library (NetworkX, igraph, PyTorch Geometric)
@@ -139,7 +139,7 @@ intuitively when you navigated Wikipedia. Starting from a vertex, visit all of
 its immediate neighbours first, then the neighbours of those neighbours. You
 expand outward in concentric rings of increasing hop distance.</p>
 <p>The key ingredient is a <strong>queue</strong>: a first-in-first-out structure holding the
-vertices you have discovered but not yet explored. Python's <code>collections.deque</code>
+vertices you have discovered but not yet explored. Python&rsquo;s <code>collections.deque</code>
 gives O(1) append and popleft.</p>
 <pre><code class="language-python">from collections import deque
 
@@ -164,9 +164,9 @@ vertices, each visited exactly once, in ring order.</p>
 <code>visited</code> set), and every edge is examined at most twice. That is the tightest
 bound you can hope for on a traversal.</p>
 <p>Because BFS explores vertices in order of hop distance, it automatically finds
-the <strong>shortest unweighted path</strong> between two vertices --- the first time you
+the <strong>shortest unweighted path</strong> between two vertices &mdash; the first time you
 reach the target, you have reached it in the minimum number of hops. The
-companion code's <code>bfs_shortest_path</code> function tracks the path taken to each
+companion code&rsquo;s <code>bfs_shortest_path</code> function tracks the path taken to each
 vertex, not just the visit order.</p>
 <hr />
 <h2>Depth-first search</h2>
@@ -191,23 +191,23 @@ replacing the queue with a <strong>stack</strong> (last-in-first-out).</p>
 <p>Swapping <code>popleft</code> for <code>pop</code> changes the behaviour completely. DFS follows the
 first unexplored edge, and keeps following edges until it hits a dead end before
 backtracking. Starting from Alice, DFS produces
-<code>['Alice', 'Bob', 'Dave', 'Carol', 'Eve', 'Frank']</code> --- it dove from Alice to
+<code>['Alice', 'Bob', 'Dave', 'Carol', 'Eve', 'Frank']</code> &mdash; it dove from Alice to
 Bob to Dave before backing up to visit Carol.</p>
 <p>DFS also runs in O(V + E). A recursive variant is often easier to read, but for
-huge graphs the iterative version is safer --- Python's recursion limit
+huge graphs the iterative version is safer &mdash; Python&rsquo;s recursion limit
 (typically 1000) can be blown by a single deep path.</p>
-<p>Where BFS is the tool for "shortest path" and "levels of separation", DFS is the
+<p>Where BFS is the tool for &ldquo;shortest path&rdquo; and &ldquo;levels of separation&rdquo;, DFS is the
 tool for topological sort, cycle detection, strongly connected components, and
 any question about the overall <em>shape</em> of a graph.</p>
 <hr />
-<h2>Dijkstra's shortest path</h2>
+<h2>Dijkstra&rsquo;s shortest path</h2>
 <p>BFS finds the shortest path when every edge has the same cost. But most real
-problems come with weights. "Shortest" cannot mean "fewest hops" --- it must
-mean "smallest total weight". Dijkstra's algorithm is the workhorse solution,
+problems come with weights. &ldquo;Shortest&rdquo; cannot mean &ldquo;fewest hops&rdquo; &mdash; it must
+mean &ldquo;smallest total weight&rdquo;. Dijkstra&rsquo;s algorithm is the workhorse solution,
 provided all edge weights are non-negative.</p>
 <p>The idea is a greedy expansion from the start vertex, always extending the
 frontier through the vertex with the smallest known distance. A <strong>priority
-queue</strong> --- a binary heap in practice --- replaces the plain queue from BFS.</p>
+queue</strong> &mdash; a binary heap in practice &mdash; replaces the plain queue from BFS.</p>
 <pre><code class="language-python">import heapq
 
 def dijkstra(graph, start):
@@ -231,7 +231,7 @@ def dijkstra(graph, start):
 <p>Every vertex starts at infinity except the source. On each iteration we pop the
 vertex with the smallest tentative distance and relax its outgoing edges: if we
 can reach a neighbour more cheaply by going <em>through</em> the current vertex, we
-update that neighbour's distance and push it back onto the heap. Stale entries
+update that neighbour&rsquo;s distance and push it back onto the heap. Stale entries
 (for which a shorter path has already been found) are filtered out by the
 <code>current_dist &gt; distances[current]</code> check.</p>
 <p>Total cost: O((V + E) log V). Dijkstra sits at the heart of every routing system
@@ -241,7 +241,7 @@ across the internet backbone and plans motion paths for robots.</p>
 <hr />
 <h2>Connected components</h2>
 <p>An undirected graph is <strong>connected</strong> if there is a path between every pair of
-vertices. Many real graphs are not connected --- they split into several
+vertices. Many real graphs are not connected &mdash; they split into several
 independent pieces, called <strong>connected components</strong>. Finding them is a classic
 application of repeated BFS (or DFS).</p>
 <pre><code class="language-python">def connected_components(graph):
@@ -264,10 +264,10 @@ application of repeated BFS (or DFS).</p>
     return components
 </code></pre>
 <p>You walk across every vertex. Whenever you encounter an unvisited one, you fire
-off a BFS from it to collect everything reachable --- that is one component. The
+off a BFS from it to collect everything reachable &mdash; that is one component. The
 total work is O(V + E), because across all the BFS calls combined, each vertex
 and each edge is still only processed once.</p>
-<p>The companion code's friendship network has an isolated pair (Grace and Heidi)
+<p>The companion code&rsquo;s friendship network has an isolated pair (Grace and Heidi)
 tacked on, and the function correctly identifies two components. In social
 network analysis, component structure tells you about community boundaries. In
 bioinformatics, it tells you about gene modules. In image segmentation, it tells
@@ -279,7 +279,7 @@ over a directed graph: <strong>which vertices are most important?</strong></p>
 <p>Imagine a random web surfer who, at every step, either clicks a link on the
 current page with probability <code>d</code> (the damping factor, typically 0.85) or
 teleports to a random page with probability <code>1 - d</code>. Let the walk run forever.
-The long-run probability that the surfer ends up on each page is that page's
+The long-run probability that the surfer ends up on each page is that page&rsquo;s
 PageRank.</p>
 <p>You could solve this as a gigantic linear system, but the <strong>power method</strong> is
 simpler: start with uniform rank and redistribute it along edges until it stops
@@ -315,7 +315,7 @@ vertex also receives a small uniform teleport contribution. Dangling vertices
 Repeat until the ranks stop changing.</p>
 <p>Under the hood this is a <strong>fixed-point iteration on the stochastic matrix</strong>
 derived from the adjacency structure, converging to the <strong>dominant
-eigenvector</strong> --- the stationary distribution of a random walk on the graph.
+eigenvector</strong> &mdash; the stationary distribution of a random walk on the graph.
 The companion code runs PageRank on a toy five-page web and produces a little
 ASCII bar chart of vertex importance. The mechanics are exactly those of the
 original Google algorithm.</p>
@@ -323,8 +323,8 @@ original Google algorithm.</p>
 <h2>When NOT to use a graph</h2>
 <p>Graphs are versatile, but they are not always the right choice. For dense
 numerical data a graph is a catastrophic fit. A 256 by 256 image has 65,536
-pixels; encoding "pixels are next to their four neighbours" as explicit edges
-would be absurd. Use a rank-3 tensor, as in Part 3 --- the spatial grid is
+pixels; encoding &ldquo;pixels are next to their four neighbours&rdquo; as explicit edges
+would be absurd. Use a rank-3 tensor, as in Part 3 &mdash; the spatial grid is
 implicit in the indexing.</p>
 <p>The same logic applies to tabular data. A CSV of customer records is not a
 graph; it is a matrix. Reach for a graph only when the relationships between
@@ -338,34 +338,34 @@ traversals into dense matrix multiplications wherever possible.</p>
 <p>Graphs are a structural backbone of modern machine learning. Once you recognise
 them, you see them everywhere.</p>
 <p><strong>Knowledge graphs and RAG.</strong> A knowledge graph encodes facts as triples:
-(subject, predicate, object). Paris --- is-capital-of --- France. Its advantage
+(subject, predicate, object). Paris &mdash; is-capital-of &mdash; France. Its advantage
 over a table is that it represents multi-hop relationships naturally.
 Retrieval-augmented generation systems increasingly use knowledge graphs to
 ground language models in structured facts and let them trace reasoning chains
-across related entities. Microsoft's GraphRAG builds a knowledge graph from a
+across related entities. Microsoft&rsquo;s GraphRAG builds a knowledge graph from a
 text corpus and queries it alongside vector search. We will give knowledge
 graphs their own article later in this foundations series.</p>
 <p><strong>Graph neural networks.</strong> A GNN operates directly on a graph. Each node has a
 feature vector, and each layer updates those features based on the features of
-the node's neighbours --- <strong>message passing</strong>. Information propagates across the
+the node&rsquo;s neighbours &mdash; <strong>message passing</strong>. Information propagates across the
 graph, and the model learns representations that encode both node attributes and
 graph structure. GNNs are the state of the art for molecular property
 prediction, drug discovery, protein interaction analysis, traffic forecasting,
-and recommendation. DeepMind's AlphaFold uses graph-based attention to predict
+and recommendation. DeepMind&rsquo;s AlphaFold uses graph-based attention to predict
 protein structure. GNNs exist because many problems are naturally graphs, not
 tables.</p>
 <p><strong>Computation graphs in autograd.</strong> When you call <code>.backward()</code> in PyTorch, the
 system walks a directed acyclic graph of operations built during the forward
 pass. Every operation is a node, every input/output relationship is an edge,
 and the topological order of the DAG determines the order of gradient
-computation. This is not a metaphor --- it is a literal graph data structure,
+computation. This is not a metaphor &mdash; it is a literal graph data structure,
 and it is why PyTorch can handle dynamic control flow that static graph
 frameworks struggle with.</p>
 <p><strong>Attention as a graph over tokens.</strong> Every transformer layer computes
 attention scores between pairs of tokens. A transformer layer is processing a
 <strong>complete directed graph</strong> over the input tokens, where every edge carries a
 learned attention weight. The attention mask then restricts which edges exist
---- causal masking makes it a DAG, local attention makes it sparse. Sparse
+&mdash; causal masking makes it a DAG, local attention makes it sparse. Sparse
 attention research (Longformer, BigBird, Reformer) is explicit about this: the
 authors are deliberately sparsifying a dense graph to reduce quadratic cost to
 linear.</p>
@@ -387,20 +387,20 @@ lists. We have just built exactly that. The adjacency list is a dictionary of
 lists, and each list hangs off a vertex the way the nodes of a singly linked
 list hang off a head pointer. A graph is what happens when you let nodes have
 multiple outgoing pointers and allow those pointers to form cycles.</p>
-<p>In Part 6 we turn to <strong>hash tables</strong>. We have been using them already --- the
-adjacency dictionary above is a hash table --- but treating them as magic. The
+<p>In Part 6 we turn to <strong>hash tables</strong>. We have been using them already &mdash; the
+adjacency dictionary above is a hash table &mdash; but treating them as magic. The
 next article pulls the magic apart: how hash functions work, what collisions
-look like, why Python's <code>dict</code> resizes the way it does, and where hash tables
+look like, why Python&rsquo;s <code>dict</code> resizes the way it does, and where hash tables
 show up in ML: feature hashing for high-cardinality categoricals, count-min
 sketches on streams, locality-sensitive hashing for approximate nearest
 neighbours, and the vocab table of every tokeniser on earth.</p>
 <hr />
 <h2>The complete code</h2>
-<p>The full script is on GitHub --- grab it here and run it yourself:</p>
+<p>The full script is on GitHub &mdash; grab it here and run it yourself:</p>
 <p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/00-foundations/05-graphs/graphs.py"><strong>graphs.py</strong></a></p>
 <p>Run it with:</p>
 <pre><code class="language-bash">python graphs.py
 </code></pre>
 <hr />
-<p><em>This is Part 5 of the series "Algorithms in Python". You can find the full series
+<p><em>This is Part 5 of the series &ldquo;Algorithms in Python&rdquo;. You can find the full series
 and source code at <a href="https://github.com/grahamroy/algorithms-in-python">github.com/grahamroy/algorithms-in-python</a>.</em></p>

@@ -262,10 +262,11 @@ sometimes <em>truncate</em> the trained ensemble: keep only the first
 <code>M' &lt; M</code> trees that produce indistinguishable test loss.</p>
 <p>Histogram-based variants (LightGBM, XGBoost <code>hist</code>, sklearn&rsquo;s
 <code>HistGradientBoostingClassifier</code>) replace per-feature sort with
-quantile binning. Training cost drops from <code>O(M · n · d ·
-depth)</code> to roughly <code>O(M · #bins · d · depth)</code> — sublinear in <code>n</code>
-beyond the bin count. This is what makes LightGBM and XGBoost
-practical on tens of millions of rows.</p>
+quantile binning. The expensive per-split sorting is replaced
+by cheap fixed-size bin scans — split finding costs
+<code>O(#bins · d)</code> per node instead of <code>O(n · d)</code>, on top of one
+linear histogram pass per level. This is what makes LightGBM
+and XGBoost practical on tens of millions of rows.</p>
 <hr />
 <h2>The modern GBM stack</h2>
 <p>In production in 2026, &ldquo;gradient boosting&rdquo; almost always means
@@ -274,8 +275,9 @@ one of three implementations:</p>
 that combined second-order gradients (Newton step), L1/L2
 regularisation on leaf weights, sparse-aware splits (a feature
 with many zeros gets a &ldquo;default direction&rdquo; branch), and a
-distributed/GPU-aware training pipeline. Won the Higgs Boson
-Kaggle competition and immediately became the new tabular
+distributed/GPU-aware training pipeline. Rose to prominence in
+the 2014 Higgs Boson Kaggle challenge (taking the dedicated
+HEP-meets-ML award) and quickly became the new tabular
 state-of-the-art. Still the most popular GBM library on
 Kaggle.</p>
 <p><strong>LightGBM</strong> (Microsoft, 2017). Histogram-based splits plus
@@ -284,9 +286,11 @@ deeper on the more informative side and shallower elsewhere, so
 the same parameter budget captures more signal. Adds native
 handling of categorical features and is typically 2–10× faster
 than XGBoost on large datasets at comparable accuracy.</p>
-<p><strong>CatBoost</strong> (Yandex, 2017). The big idea is <strong>ordered boosting</strong>
-— a target-encoding strategy that avoids the target-leakage
-that plagues naive mean-encoding of categoricals. Handles
+<p><strong>CatBoost</strong> (Yandex, 2017). Two big ideas: <strong>ordered target
+statistics</strong> — a leakage-free target encoding for categoricals
+that avoids the target-leakage plaguing naive mean-encoding —
+and <strong>ordered boosting</strong>, a scheme that removes prediction
+shift from the gradient estimates. Handles
 arbitrary categorical features without one-hot encoding,
 which matters when your <code>d</code> includes high-cardinality categorical
 columns (zip codes, product IDs, user IDs). Typically the best

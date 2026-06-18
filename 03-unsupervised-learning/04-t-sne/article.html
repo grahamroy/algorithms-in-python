@@ -95,8 +95,10 @@ clean form:</p>
 </code></pre>
 <p>Iterate until convergence (typically ~1000 iterations with
 momentum and a few standard heuristics like &ldquo;early exaggeration&rdquo;
-that multiply the high-d probabilities by 4× for the first 250
-iterations to encourage tight cluster formation).</p>
+that multiply the high-d probabilities by 4× early in training —
+the canonical implementations use the first 250 iterations; our
+from-scratch script uses 100 — to encourage tight cluster
+formation).</p>
 <hr />
 <h2>Why the t-distribution?</h2>
 <p>t-SNE&rsquo;s predecessor SNE (Hinton &amp; Roweis, 2003) used Gaussians
@@ -150,14 +152,14 @@ for comparison.</p>
   Subsample for speed : 300 points
   Perplexity          : 30
   Iterations          : 600
-  Final KL divergence : 0.411
-  KNN accuracy in 2D  : 0.910  (15-NN classifier on the embedding)
+  Final KL divergence : 0.417
+  KNN accuracy in 2D  : 0.897  (15-NN classifier on the embedding)
 </code></pre>
 <pre><code>DEMO 2 --- Same data (full 1797), scikit-learn TSNE (Barnes-Hut)
   Perplexity          : 30
   Iterations          : 1000
-  Final KL divergence : 0.755
-  KNN accuracy in 2D  : 0.971
+  Final KL divergence : 0.754
+  KNN accuracy in 2D  : 0.969
 </code></pre>
 <pre><code>DEMO 3 --- Same data, PCA (2 components, from Part 3)
   Cumulative variance explained : 0.285

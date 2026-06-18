@@ -406,7 +406,9 @@ Good-hash bucket distribution:
 Same data, same resize thresholds, same table size. The good hash takes
 about a quarter of a millisecond. The bad hash takes thirty — two orders of
 magnitude slower — because every lookup linearly scans a bucket holding all
-2000 entries. Mean bucket size with the good hash is 0.49; the maximum is 4.
+2000 entries. Mean bucket size with the good hash is 0.49; the maximum here
+was 4 (string hashes are salted per process, so the exact occupied-slot and
+max-bucket figures vary slightly from run to run).
 That gap — between a uniform distribution and everything piled in one corner
 — is exactly what the PYTHONHASHSEED was introduced to protect against. A
 hash DoS attack does not *quite* turn your dict into the bad hash table, but

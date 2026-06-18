@@ -10,7 +10,7 @@ Three demos:
   3. HyperLogLog: estimate the cardinality of 1M distinct strings using
      ~1 KB of memory.
 
-Pure stdlib. Runs in well under a second.
+Pure stdlib. Runs in a few seconds (SHA-256 hashing dominates).
 """
 
 from collections import Counter

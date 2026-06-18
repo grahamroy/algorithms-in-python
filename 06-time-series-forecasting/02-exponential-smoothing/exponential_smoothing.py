@@ -98,7 +98,7 @@ def demo_holt_winters(train, test):
 
 
 def demo_ets_auto(train, test):
-    banner("DEMO 3 --- ETS auto-selection across all (E, T, S) combinations")
+    banner("DEMO 3 --- ETS auto-selection across candidate (E, T, S) combinations")
     candidates = [
         ("add", "add", "add"),
         ("mul", "add", "mul"),

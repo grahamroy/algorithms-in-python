@@ -2,7 +2,7 @@
 Tensors — The Native Data Format of Deep Learning
 Algorithms in Python — Foundations, Part 3
 
-Demonstrates tensors using NumPy and PyTorch:
+Demonstrates tensors using NumPy:
 creation, indexing, reshaping, broadcasting,
 and deep-learning-relevant examples (batched images, conv filters, sequence data).
 """

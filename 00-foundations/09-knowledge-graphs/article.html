@@ -1,12 +1,12 @@
 <p>In Part 5 we walked <strong>graphs</strong> with BFS and DFS. In Part 8 we built
-<strong>trees</strong> as graphs with the cycles taken out. Today's structure is the
+<strong>trees</strong> as graphs with the cycles taken out. Today&rsquo;s structure is the
 opposite move: we put the cycles back in, but we add <em>semantics</em> to
 every edge. That gives us a <strong>knowledge graph</strong>.</p>
 <p>A knowledge graph is a graph where every edge has a <strong>type</strong>, every node
 has a <strong>type</strong>, and the whole thing carries enough structure that a
-machine can answer questions like <em>"which Polish-born physicists won
-the Nobel Prize after 1900?"</em> by walking the graph rather than scanning
-a table. The same structure powers Google's "People also ask" boxes,
+machine can answer questions like <em>&ldquo;which Polish-born physicists won
+the Nobel Prize after 1900?&rdquo;</em> by walking the graph rather than scanning
+a table. The same structure powers Google&rsquo;s &ldquo;People also ask&rdquo; boxes,
 Wikidata, the entity-linking step inside modern RAG systems, the
 biomedical reasoning behind drug-discovery pipelines, and the agent
 memory of any system that needs to remember <em>who did what to whom</em>.</p>
@@ -34,8 +34,8 @@ predicate is a <strong>relation</strong> that connects them — <code>born_in</c
 (Warsaw, located_in, Poland)
 (Polonium, named_after, Poland)
 </code></pre>
-<p>That is the entire data model. Stack a few hundred million of these and
-you have <strong>Wikidata</strong>. Stack a few billion and you have Google's
+<p>That is the entire data model. Stack several billion of these and
+you have <strong>Wikidata</strong>. Stack tens of billions and you have Google&rsquo;s
 Knowledge Graph or the Knowledge Vault that backs it.</p>
 <p>Drawn as a graph, the triples above look like:</p>
 <pre><code>         Polonium  -- named_after --&gt;  Poland
@@ -52,8 +52,8 @@ Knowledge Graph or the Knowledge Vault that backs it.</p>
 </code></pre>
 <p>Every node is an entity. Every edge is <em>labelled</em> with the relation
 it represents. That labelling is what separates a knowledge graph from
-a plain graph in Part 5. In a plain graph, an edge says "these two
-nodes are connected." In a knowledge graph, the edge says <em>how</em> they
+a plain graph in Part 5. In a plain graph, an edge says &ldquo;these two
+nodes are connected.&rdquo; In a knowledge graph, the edge says <em>how</em> they
 are connected, and the algorithm walking the graph can use that to
 answer typed questions.</p>
 <p>The standard serialisation for triples is <strong>RDF</strong> (Resource Description
@@ -81,9 +81,9 @@ The naive implementation is just a set of three-tuples:</p>
 }
 </code></pre>
 <p>To query, you scan the set looking for triples that match a pattern
-where some positions are bound and others are wildcards. <em>"What did
-Marie Curie discover?"</em> is the pattern <code>(marie_curie, discovered, ?)</code>.
-<em>"Where was every Nobel-winning physicist born?"</em> is a two-step pattern
+where some positions are bound and others are wildcards. <em>&ldquo;What did
+Marie Curie discover?&rdquo;</em> is the pattern <code>(marie_curie, discovered, ?)</code>.
+<em>&ldquo;Where was every Nobel-winning physicist born?&rdquo;</em> is a two-step pattern
 that joins on a shared variable.</p>
 <p>Production triple stores — Apache Jena, RDF4J, Virtuoso, AnzoGraph,
 Stardog — keep multiple <strong>indexes</strong> so these scans are fast. The
@@ -91,7 +91,7 @@ canonical trick is to maintain six sorted indexes, one for each
 permutation of (subject, predicate, object): SPO, SOP, PSO, POS, OSP,
 OPS. Whichever positions are bound in a query, one of those indexes
 puts the matching triples in a contiguous range. With the right index,
-<em>"all triples with predicate <code>born_in</code>"</em> is a constant-time lookup
+<em>&ldquo;all triples with predicate <code>born_in</code>&ldquo;</em> is a constant-time lookup
 followed by a linear scan over the matches; without it, you scan the
 whole store.</p>
 <p>The companion script builds a tiny in-memory triple store and
@@ -133,18 +133,18 @@ signatures:</p>
 </code></pre>
 <p>This says a <code>Scientist</code> <em>is a</em> <code>Person</code>, <code>Person</code> <em>is an</em> <code>Agent</code>, and
 the relation <code>born_in</code> connects a <code>Person</code> (subject) to a <code>Place</code>
-(object). Now the query <em>"all scientists born in Poland"</em> can use the
+(object). Now the query <em>&ldquo;all scientists born in Poland&rdquo;</em> can use the
 hierarchy to also find people whose type is <code>Physicist</code> or <code>Chemist</code>
 without listing them explicitly, because both are subclasses of
 <code>Scientist</code>.</p>
 <p>Heavyweight ontologies in <strong>OWL</strong> (Web Ontology Language) add
 constraints — <em>every Person has exactly one date of birth</em>, <em>no Place
 can be born_in another Place</em> — and a <strong>reasoner</strong> can derive new
-triples from existing ones. <em>"If A is the parent of B and B is the
-parent of C, then A is the grandparent of C"</em> is a rule the reasoner
+triples from existing ones. <em>&ldquo;If A is the parent of B and B is the
+parent of C, then A is the grandparent of C&rdquo;</em> is a rule the reasoner
 can apply automatically every time you add a new <code>parent_of</code> triple.</p>
 <p>Modern practice is increasingly lightweight. Wikidata uses a flexible,
-mostly self-describing schema; Google's Knowledge Graph uses a custom
+mostly self-describing schema; Google&rsquo;s Knowledge Graph uses a custom
 internal one; product knowledge graphs at Amazon and Pinterest sit
 somewhere in between. The heavy OWL reasoning of the early Semantic
 Web era turned out to be expensive in practice, and most teams now
@@ -163,7 +163,7 @@ reads like SQL with triple patterns instead of tables:</p>
 <p>Three triple patterns, joined on the shared variables <code>?scientist</code> and
 <code>?city</code>. The query engine searches the triple store for assignments
 that satisfy all three patterns simultaneously. Add a <code>FILTER</code> clause
-for <em>"after 1900"</em> and you have the Polish-born twentieth-century
+for <em>&ldquo;after 1900&rdquo;</em> and you have the Polish-born twentieth-century
 scientists query.</p>
 <p>Property graph databases (Neo4j, Memgraph, TigerGraph) use <strong>Cypher</strong>
 or <strong>Gremlin</strong> and reach for a slightly different model — nodes and
@@ -177,9 +177,9 @@ for tables. SPARQL and Cypher do it for graphs.</p>
 <hr />
 <h2>Entity embeddings — the neural side of the same data</h2>
 <p>Symbolic queries are powerful when the question is precise and the
-data is clean. They struggle when the question is fuzzy ("entities
-similar to Marie Curie") or when the graph is incomplete ("predict
-what Marie Curie <em>might have</em> discovered if we did not record it").</p>
+data is clean. They struggle when the question is fuzzy (&ldquo;entities
+similar to Marie Curie&rdquo;) or when the graph is incomplete (&ldquo;predict
+what Marie Curie <em>might have</em> discovered if we did not record it&rdquo;).</p>
 <p>The neural answer is to <strong>embed</strong> every entity and every relation as a
 vector in some shared space, and design the embeddings so that the
 geometry encodes the same facts the triples do. The simplest and most
@@ -188,8 +188,8 @@ famous model is <strong>TransE</strong> (Bordes et al., 2013):</p>
 </code></pre>
 <p>Read that as: the embedding of the head entity <em>plus</em> the embedding of
 the relation should equal the embedding of the tail entity. If
-<code>marie_curie + born_in ≈ warsaw</code>, then asking <em>"where was Marie Curie
-born?"</em> becomes a nearest-neighbour search: compute <code>marie_curie +
+<code>marie_curie + born_in ≈ warsaw</code>, then asking <em>&ldquo;where was Marie Curie
+born?&rdquo;</em> becomes a nearest-neighbour search: compute <code>marie_curie +
 born_in</code>, find the closest entity vector, return it. A perfectly
 trained TransE model would let you complete <em>missing</em> triples by the
 same operation — the geometric analogue of symbolic reasoning.</p>
@@ -236,19 +236,19 @@ of relations.</p>
 <h2>Knowledge graphs in RAG</h2>
 <p>Retrieval-augmented generation is the dominant pattern for grounding
 LLM responses in a corpus you control. The textbook RAG pipeline is:
-embed the user's question, retrieve the top-<em>k</em> most similar document
-chunks by cosine similarity, paste them into the LLM's context.</p>
+embed the user&rsquo;s question, retrieve the top-<em>k</em> most similar document
+chunks by cosine similarity, paste them into the LLM&rsquo;s context.</p>
 <p>That works well when the answer lives in a single passage of text. It
 works badly when the answer requires <em>combining</em> facts from several
-sources — <em>"which Polish-born scientists discovered radioactive
-elements named after countries?"</em> is a question whose answer is not in
+sources — <em>&ldquo;which Polish-born scientists discovered radioactive
+elements named after countries?&rdquo;</em> is a question whose answer is not in
 any single Wikipedia paragraph. It is in the <strong>join</strong> of several
 paragraphs, and pure vector retrieval has no concept of join.</p>
 <p><strong>Knowledge-graph RAG</strong> (or <strong>GraphRAG</strong>, in the Microsoft paper that
 gave the technique its current name) closes that gap. The pipeline:</p>
 <ol>
-<li><strong>Entity-link</strong> the user's question. <em>"Polish-born scientists who
-   discovered named-after-countries elements"</em> contains the entities
+<li><strong>Entity-link</strong> the user&rsquo;s question. <em>&ldquo;Polish-born scientists who
+   discovered named-after-countries elements&rdquo;</em> contains the entities
    <code>:poland</code>, <code>:scientist</code>, <code>:element</code>, and the relation pattern
    <code>(?elem, named_after, ?country)</code>.</li>
 <li><strong>Walk</strong> the knowledge graph to find the relevant subgraph — the
@@ -273,7 +273,7 @@ Production KG-RAG systems use both.</p>
 <h2>Big-O and scale</h2>
 <p>[[BIG-O TABLE IMAGE]]</p>
 <p>A few concrete sizes to anchor the scale. <strong>Wikidata</strong> has about 100
-million entities and 14 billion triples. <strong>Google's Knowledge Graph</strong>
+million entities and 14 billion triples. <strong>Google&rsquo;s Knowledge Graph</strong>
 sits in the hundreds of billions of facts, depending on what you
 count. <strong>DBpedia</strong> is in the low billions. Biomedical KGs like
 <strong>UMLS</strong> are in the millions of concepts and tens of millions of
@@ -285,13 +285,13 @@ A k-hop pattern is the join of k such lookups; query planners reorder
 the patterns to do the most selective one first, exactly as a
 relational planner would.</p>
 <p>Embedding training is O(epochs × triples × dim). For the toy KG in
-the companion script with 30 triples, dim 8, and 200 epochs, that is
+the companion script with 35 triples, dim 8, and 200 epochs, that is
 ~50,000 vector operations — under a second.</p>
 <hr />
 <h2>Real-world ML and AI connections</h2>
 <p>Knowledge graphs sit underneath more of the AI stack than they get
 credit for.</p>
-<p><strong>Wikidata as a free training resource.</strong> Wikidata's CC0-licensed
+<p><strong>Wikidata as a free training resource.</strong> Wikidata&rsquo;s CC0-licensed
 triples are used for entity-linking benchmarks, multilingual
 knowledge-completion experiments, and as a grounding source for LLM
 fine-tuning. Almost every entity-linking dataset in academic NLP
@@ -300,40 +300,40 @@ traces back to Wikidata or DBpedia.</p>
 network encode drugs, genes, proteins, diseases, and pathways as
 typed entities and relations. Drug-discovery teams at pharma
 companies query these graphs to find candidate repurposing targets —
-<em>"drugs whose targets share a pathway with this disease's known
-genes"</em> — and embed the graphs to predict missing drug-disease
+<em>&ldquo;drugs whose targets share a pathway with this disease&rsquo;s known
+genes&rdquo;</em> — and embed the graphs to predict missing drug-disease
 indications. The graph is doing the relational reasoning; the
 embedding is doing the prediction.</p>
 <p><strong>Product graphs at Amazon, Pinterest, and Etsy.</strong> Every product is a
-node; every "bought together," "viewed together," "is variant of," or
-"is accessory of" relation is a typed edge; categories and brands are
+node; every &ldquo;bought together,&rdquo; &ldquo;viewed together,&rdquo; &ldquo;is variant of,&rdquo; or
+&ldquo;is accessory of&rdquo; relation is a typed edge; categories and brands are
 nodes too. Embedding the resulting graph gives you product
 recommendations that respect categorical structure rather than
 treating every item as an independent vector. The same idea powers
-Pinterest's PinSage and Uber's geo-product graphs.</p>
+Pinterest&rsquo;s PinSage and Uber&rsquo;s geo-product graphs.</p>
 <p><strong>Agent memory in LLM applications.</strong> When an agent needs to remember
-<em>"the user's spouse is named Alex and prefers vegetarian restaurants
-in Bristol,"</em> the natural representation is a small triple store —
+<em>&ldquo;the user&rsquo;s spouse is named Alex and prefers vegetarian restaurants
+in Bristol,&rdquo;</em> the natural representation is a small triple store —
 <code>(user, spouse, alex)</code>, <code>(alex, prefers, vegetarian_food)</code>,
 <code>(alex, lives_in, bristol)</code>. Every modern agent framework that
 supports persistent memory either ships with a triple store or uses
-one under the hood (LangChain's <code>ConversationKGMemory</code>, Letta's
-memory modules, Microsoft's Semantic Kernel memory plugins).</p>
+one under the hood (LangChain&rsquo;s <code>ConversationKGMemory</code>, Letta&rsquo;s
+memory modules, Microsoft&rsquo;s Semantic Kernel memory plugins).</p>
 <p><strong>Schema.org and the Web.</strong> The structured snippets you see in Google
 search results — recipes, events, product cards, FAQ accordions —
 come from schema.org markup, which is a knowledge-graph vocabulary
 embedded in HTML. Every page that uses it is contributing typed
 triples back to the public graph.</p>
-<p><strong>Cypher and Gremlin in fraud detection.</strong> The pattern <em>"three
+<p><strong>Cypher and Gremlin in fraud detection.</strong> The pattern <em>&ldquo;three
 accounts that share an address, transferred money to the same fourth
-account, on the same day"</em> is a graph traversal. Banks and crypto
+account, on the same day&rdquo;</em> is a graph traversal. Banks and crypto
 exchanges run Neo4j or TigerGraph behind their fraud-detection
 systems precisely because that pattern is impossible to express
 cleanly in SQL.</p>
 <p><strong>Prompt-graph debugging in LLM evaluation.</strong> Modern eval suites
 (LangSmith, Weights &amp; Biases Weave, OpenAI Evals) record every prompt,
 completion, tool call, and trace as nodes in a small operational KG
-keyed on session and trace IDs. The "trace tree" is a knowledge graph
+keyed on session and trace IDs. The &ldquo;trace tree&rdquo; is a knowledge graph
 in everything but name.</p>
 <hr />
 <h2>When NOT to use a knowledge graph</h2>
@@ -357,8 +357,8 @@ optimised for read-heavy workloads. A KG that changes hundreds of
 times per second per entity is a worse fit than a graph database
 designed for write throughput, which in turn is a worse fit than a
 streaming event store. Match the structure to the access pattern.</p>
-<p><strong>When you cannot afford the entity-resolution problem.</strong> "Marie
-Curie" and "Maria Skłodowska-Curie" and "M. Curie (1867-1934)" are
+<p><strong>When you cannot afford the entity-resolution problem.</strong> &ldquo;Marie
+Curie&rdquo; and &ldquo;Maria Skłodowska-Curie&rdquo; and &ldquo;M. Curie (1867-1934)&rdquo; are
 the same person, and your KG will quietly degrade if you do not
 unify them. Entity resolution is its own substantial engineering
 problem; budget for it before committing to a KG.</p>
@@ -387,7 +387,7 @@ vectors of Parts 1 and 2.</p>
 builds a tiny KG of scientists, runs 1-hop and 2-hop pattern queries
 against it, and trains TransE embeddings on the same data — showing
 that after 200 epochs, <em>Marie Curie + born_in</em> lands closer to
-<em>Warsaw</em> than to any of the other forty entities in the graph. That
+<em>Warsaw</em> than to any of the other 28 entities in the graph. That
 is the whole geometric punchline of KG embeddings, demonstrated
 against an actual training loop in pure Python.</p>
 <hr />

@@ -111,9 +111,11 @@ collapses to one cluster). A common heuristic: set `σ` to the
 median pairwise distance, or use a per-point adaptive scale
 (Zelnik-Manor & Perona, 2004).
 
-For the companion script we use a fully-connected RBF graph
-since the dataset is small and the dense Laplacian fits in
-memory.
+For the companion script we use a k-NN affinity graph (k = 10)
+with a per-point local Gaussian scale (Zelnik-Manor & Perona,
+2004) — on curved cluster shapes the sparse locally-scaled
+graph separates the structure far more reliably than a dense
+RBF kernel with a single global bandwidth.
 
 ---
 
@@ -428,12 +430,13 @@ The full script is on GitHub — grab it and run it:
 Run it with:
 
 ```bash
-pip install numpy scikit-learn
+pip install numpy scipy scikit-learn
 python spectral_clustering.py
 ```
 
-It needs `numpy` and `scikit-learn`. The script implements
-spectral clustering from scratch — RBF affinity, symmetric
+It needs `numpy`, `scipy`, and `scikit-learn`. The script implements
+spectral clustering from scratch — k-NN affinity with local
+Gaussian scale, symmetric
 normalised Laplacian, eigendecomposition, K-Means on the
 row-normalised eigenvectors — and applies it to three datasets
 spanning K-Means' failure modes: 3 Gaussian blobs (control),

@@ -503,7 +503,8 @@ Run it with:
 python probabilistic_data_structures.py
 ```
 
-It finishes in well under a second on a laptop. The companion script
+It finishes in a few seconds on a laptop — SHA-256 hashing of over a
+million items dominates the runtime. The companion script
 builds all three structures from stdlib only — Bloom filter on a
 million items measuring observed vs theoretical false-positive rate,
 Count-Min Sketch over a Zipfian word stream recovering top-10 heavy

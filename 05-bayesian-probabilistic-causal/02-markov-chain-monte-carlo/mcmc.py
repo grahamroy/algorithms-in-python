@@ -9,7 +9,7 @@ Three demos:
   3. Compare against a grid-based reference (only feasible
      in 2-D) to validate the sampler.
 
-Dependencies: numpy, scipy. Runs in well under a minute.
+Dependencies: numpy. Runs in well under a minute.
 """
 
 import sys

@@ -239,7 +239,7 @@ DEMO 1 --- UMAP (umap-learn) on the digits dataset
 
 ```
 DEMO 2 --- scikit-learn TSNE (Barnes-Hut) for comparison
-  Perplexity          : 30
+  Perplexity          : 30.0
   Wall time (fit)     : 3.51 s
   KNN accuracy in 2D  : 0.969
 ```

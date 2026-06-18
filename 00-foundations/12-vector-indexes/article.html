@@ -9,7 +9,7 @@ exact search is hopeless.</p>
 <p>Every modern vector database — FAISS, Pinecone, Chroma, Weaviate,
 LanceDB, Milvus — is built around three or four ideas in this
 article. Every RAG pipeline uses one of them between the embedding
-model and the LLM. Every "find similar images / songs / documents"
+model and the LLM. Every &ldquo;find similar images / songs / documents&rdquo;
 feature on a major platform is doing approximate nearest-neighbour
 (ANN) search at the bottom of the stack. The three structures that
 matter are <strong>HNSW</strong>, <strong>IVF</strong>, and <strong>PQ</strong>, plus <strong>LSH</strong> which we met
@@ -64,8 +64,8 @@ production today.</p>
 <h2>HNSW — the graph that walks itself to the answer</h2>
 <p><strong>Hierarchical Navigable Small World</strong> (HNSW) is the highest-quality
 algorithm for medium-scale dense ANN. It is the default in most
-modern vector databases (Qdrant, Weaviate, Milvus, LanceDB) and the
-engine inside FAISS's <code>IndexHNSWFlat</code>.</p>
+modern vector databases (Qdrant, Weaviate, Milvus) and the
+engine inside FAISS&rsquo;s <code>IndexHNSWFlat</code>.</p>
 <p>The structure is a <em>multi-layer</em> graph. Every vector lives at layer
 0 (the bottom). A small random sample also lives at layer 1, a
 smaller sample at layer 2, and so on — the layer count is
@@ -95,10 +95,10 @@ end up only at layer 0, some reach higher), then their neighbours
 at each layer are found by the same greedy search and connected.
 The construction is O(N · log N · M) where M is the per-layer
 out-degree.</p>
-<p><strong>Why it works.</strong> HNSW is a "navigable small world" — the
+<p><strong>Why it works.</strong> HNSW is a &ldquo;navigable small world&rdquo; — the
 neighbourhoods are short-range but the cross-layer edges create
 shortcuts that make the graph diameter logarithmic. It is the
-algorithmic equivalent of "six degrees of separation" applied to
+algorithmic equivalent of &ldquo;six degrees of separation&rdquo; applied to
 embedding space.</p>
 <p><strong>Memory.</strong> Roughly <code>N · M · 8 bytes</code> for the adjacency lists, plus
 the vectors themselves. For N = 1 M, d = 768, M = 32, that is about
@@ -118,7 +118,7 @@ point: greedy walk on a small-world graph, no exhaustive scan.
 Production HNSW with multiple layers, iterative insertion, and a
 larger out-degree typically lands at recall@10 above 0.99 with
 50–200× speedup over brute force at corpus sizes of millions or
-more — well past where numpy's vectorised brute force stops being
+more — well past where numpy&rsquo;s vectorised brute force stops being
 competitive.</p>
 <hr />
 <h2>IVF — partition first, search the buckets</h2>
@@ -128,7 +128,7 @@ corpora.</p>
 <p>Run k-means on the vector corpus to find K cluster centroids (a
 typical choice is <code>K = sqrt(N)</code>). Each vector is assigned to its
 nearest centroid, and the index becomes a list of K buckets:
-<em>"vectors closer to centroid 1," "vectors closer to centroid 2,"</em>
+<em>&ldquo;vectors closer to centroid 1,&rdquo; &ldquo;vectors closer to centroid 2,&rdquo;</em>
 and so on. To search, find the <code>nprobe</code> centroids nearest to the
 query and brute-force-search only the vectors in those buckets.</p>
 <pre><code>              centroid 0    centroid 1    centroid 2
@@ -141,7 +141,7 @@ query and brute-force-search only the vectors in those buckets.</p>
               search ~10,000 vectors instead of all N
 </code></pre>
 <p>The trade-off is clear: small <code>nprobe</code> gives fast queries but lower
-recall (the true neighbour might live in a bucket you didn't visit);
+recall (the true neighbour might live in a bucket you didn&rsquo;t visit);
 large <code>nprobe</code> gives high recall but pulls more vectors into the
 brute-force scan. Production systems usually run <code>nprobe</code> between 8
 and 64, depending on the recall target.</p>
@@ -233,7 +233,7 @@ memory.</p>
 state of the art for ANN throughout the 2000s. It uses hash
 functions designed so that <em>similar</em> vectors collide more often
 than dissimilar ones. The structure is a hash table; the search
-looks up the query's hash bucket and brute-forces the candidates.</p>
+looks up the query&rsquo;s hash bucket and brute-forces the candidates.</p>
 <p>Modern dense-vector workloads have largely moved past LSH —
 HNSW, IVF, and PQ deliver higher recall at lower memory cost on
 the same hardware. LSH is still strong for <strong>set similarity</strong>
@@ -257,7 +257,7 @@ handle them.</p>
   and can tolerate a small recall hit.</li>
 <li><strong>ScaNN</strong> (Google): IVF + a learned anisotropic quantiser. The
   state of the art on most academic benchmarks; the engine behind
-  Google's enterprise vector search.</li>
+  Google&rsquo;s enterprise vector search.</li>
 </ul>
 <p>The right combination depends on <strong>N, d, latency target, recall
 target, and update frequency</strong>. A startup serving a few hundred
@@ -277,27 +277,27 @@ LSH still has its niche in set similarity but is rarely the right
 choice for dense vectors today.</p>
 <hr />
 <h2>Real-world ML and AI connections</h2>
-<p>ANN search is the substrate under most "find me something similar"
+<p>ANN search is the substrate under most &ldquo;find me something similar&rdquo;
 features in modern AI.</p>
 <p><strong>RAG retrieval.</strong> Every retrieval-augmented generation pipeline
-embeds the user's question, runs an ANN search over a vector
+embeds the user&rsquo;s question, runs an ANN search over a vector
 database, and feeds the top-k retrieved chunks to the LLM as
 context. The vector database is HNSW or IVF-PQ. The embedding
 model is something like <code>text-embedding-3-small</code> (OpenAI),
-<code>embedding-001</code> (Cohere), or one of the open-source BGE / GTE
+<code>embed-english-v3</code> (Cohere), or one of the open-source BGE / GTE
 families. The full pipeline — embedding, ANN search, LLM context
 construction — is the dominant pattern for grounding LLMs in
 private data.</p>
 <p><strong>Semantic search at scale.</strong> Google, Bing, and every enterprise
 search product runs ANN over learned embeddings as a parallel path
 to keyword search. The scoring is a fusion of the two; the
-embedding side handles "find documents about X" queries that
+embedding side handles &ldquo;find documents about X&rdquo; queries that
 keyword matching misses.</p>
-<p><strong>Image and video similarity.</strong> Pinterest's visual search,
-Google Lens, every "find similar products" feature on Amazon and
+<p><strong>Image and video similarity.</strong> Pinterest&rsquo;s visual search,
+Google Lens, every &ldquo;find similar products&rdquo; feature on Amazon and
 Etsy, and the duplicate-detection step in any photo library all
-run ANN over learned image embeddings. Pinterest's PinSage uses
-HNSW internally; Amazon's product graph uses IVF-PQ.</p>
+run ANN over learned image embeddings. Pinterest&rsquo;s PinSage uses
+HNSW internally; Amazon&rsquo;s product graph uses IVF-PQ.</p>
 <p><strong>Recommender candidate generation.</strong> The first pass of a modern
 recommender — generating a few hundred candidates from a catalogue
 of millions of items — is an ANN over user and item embeddings.
@@ -307,22 +307,22 @@ ANN indexes for this stage.</p>
 <p><strong>Embedding cache for LLM serving.</strong> Some inference-serving stacks
 cache embeddings of frequently-seen prompts and use ANN to look
 up cached responses for near-duplicate queries. The trick is the
-same as deduplication — ANN tells you "have I seen this before,
-approximately?" — and shaves real money off the inference bill.</p>
+same as deduplication — ANN tells you &ldquo;have I seen this before,
+approximately?&rdquo; — and shaves real money off the inference bill.</p>
 <p><strong>Anomaly detection.</strong> Network monitoring, fraud detection, and
 some classes of ML monitoring use ANN to flag points that have no
-near neighbours in a corpus of "normal" examples. The structures
-are the same, the use case is inverted: instead of "find me what
-is closest," it is "find me what is far from everything."</p>
+near neighbours in a corpus of &ldquo;normal&rdquo; examples. The structures
+are the same, the use case is inverted: instead of &ldquo;find me what
+is closest,&rdquo; it is &ldquo;find me what is far from everything.&rdquo;</p>
 <p><strong>Code search.</strong> GitHub Copilot, Sourcegraph, and several IDE
 plugins embed code snippets and run ANN over the embedding space
 to surface similar implementations across a codebase. The
-"similar code" suggestions you get in modern IDEs are HNSW
+&ldquo;similar code&rdquo; suggestions you get in modern IDEs are HNSW
 queries underneath.</p>
 <hr />
 <h2>When NOT to use ANN</h2>
-<p>ANN is the right tool for "find approximately similar things at
-scale." It is the wrong tool when:</p>
+<p>ANN is the right tool for &ldquo;find approximately similar things at
+scale.&rdquo; It is the wrong tool when:</p>
 <p><strong>The corpus is small.</strong> Below ~10,000 vectors, brute force in
 numpy is faster than any ANN structure once you account for
 construction cost. Use brute force, profile, only switch when
@@ -372,8 +372,8 @@ everything we now know about storage, sparsity, and indexing.</p>
 <p>Run it with:</p>
 <pre><code class="language-bash">python vector_indexes.py
 </code></pre>
-<p>It needs <code>numpy</code> — the same single dependency we used in Parts 1-3
-and 11. The script implements brute-force kNN, simplified IVF, PQ,
+<p>It needs <code>numpy</code> — the same dependency we used in Parts 1-3 (Part 11
+added <code>scipy</code>). The script implements brute-force kNN, simplified IVF, PQ,
 and a single-layer NSW graph, all from scratch, and benchmarks
 each on a 50,000-vector clustered corpus in 128 dimensions. The
 takeaways worth pinning to the wall: <strong>IVF achieves perfect
@@ -381,8 +381,8 @@ recall at moderate latency on clustered data</strong>, <strong>PQ gives ~48×
 memory compression</strong> (paired with IVF or HNSW in production),
 and <strong>the simplified single-layer NSW shows the greedy-walk
 mechanic</strong> that real HNSW exploits at scale. At this small corpus
-size numpy's vectorised brute force is hard to beat on raw latency
-— the structures' speed wins arrive at the millions-to-billions
+size numpy&rsquo;s vectorised brute force is hard to beat on raw latency
+— the structures&rsquo; speed wins arrive at the millions-to-billions
 vector scale where production vector databases actually live.</p>
 <hr />
 <p><em>This is Part 12 of the Algorithms in Python series, Foundations track — the final foundation. The companion script <code>vector_indexes.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/@grahamjroy/sparse-matrices-when-most-of-your-data-is-zero-85cebc669d78">Part 11</a> covered sparse matrices. The next article opens the algorithms track with linear regression — and revisits everything we have built about storage, sparsity, and indexing, now in service of a model that learns.</em></p>

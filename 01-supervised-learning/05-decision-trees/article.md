@@ -256,8 +256,8 @@ DEMO 3 --- The depth-vs-overfitting tradeoff
 The pattern in the depth sweep is the bias-variance story all
 over again. At depth 1 the tree is essentially a single
 threshold — high bias, both scores around 0.83. By depth 4 the
-tree has captured most of the moon-shape; train and test
-agree at 0.93. At depth 6 the test score peaks at 0.94. Past
+tree has captured most of the moon-shape; train sits at 0.91
+with test at 0.93. At depth 6 the test score peaks at 0.94. Past
 that, the train score climbs steadily towards 1.0 (the tree
 memorises the training set) while the test score *falls* —
 classic overfitting. The fully grown tree perfectly fits 400

@@ -377,8 +377,8 @@ def demo_nsw(truth):
     start = perf_counter()
     graph = build_nsw_graph(CORPUS, m_neighbours, seed=3)
     build_time = perf_counter() - start
-    print(f"  Build time (brute-force kNN per node): {build_time:.2f} s"
-          f"  (one-off)")
+    print(f"  Build time              :  {build_time:.2f} s   "
+          f"(one-off; sampled kNN graph)")
     print()
 
     start = perf_counter()

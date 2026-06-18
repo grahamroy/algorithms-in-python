@@ -264,8 +264,9 @@ The relevant scales:
 
 **ALS per iteration**: `O(n · |Ω_i| · k² + m · |Ω_j| · k²)`
 where `|Ω_i|` is the average number of ratings per user and
-`|Ω_j|` per item. The `k²` comes from the matrix inverse in
-each per-entity update. For typical `k ≤ 100` this is fast.
+`|Ω_j|` per item. The `k²` per rating comes from building each
+entity's `k × k` Gram matrix; the `k × k` solve itself adds an
+`O(k³)` term per entity. For typical `k ≤ 100` this is fast.
 
 **SGD per epoch**: `O(|Ω| · k)` — one update per observed
 rating. Faster than ALS per iteration for small `k`, but needs
@@ -396,7 +397,8 @@ entries to simulate sparsity, fits both ALS (with closed-form
 ridge-regression per-user updates) and SGD (FunkSVD style)
 from scratch, and reports test-set RMSE for both versus the
 global-mean baseline. Both methods dramatically beat the
-baseline; ALS and SGD give nearly identical accuracy. The
+baseline; ALS edges out SGD here (0.37 vs 0.45 test RMSE),
+converging in far fewer iterations. The
 headline insight worth pinning to the wall: **matrix
 factorisation decomposes the sparse ratings matrix into
 user-factor and item-factor matrices whose dot product

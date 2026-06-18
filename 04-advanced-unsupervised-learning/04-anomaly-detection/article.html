@@ -16,9 +16,9 @@ labels for &ldquo;abnormal&rdquo; are either entirely missing or wildly
 imbalanced. Supervised classification is the wrong shape;
 unsupervised anomaly detection is the right one.</p>
 <p>This article is a <em>survey</em> rather than a deep dive on a
-single algorithm. We will walk through five distinct
+single algorithm. We will walk through six distinct
 families — statistical, density-based, distance-based,
-isolation-based, and reconstruction-based — show what each
+isolation-based, reconstruction-based, and one-class — show what each
 one does, when it is the right choice, and compare them
 side-by-side on a 2-D toy problem with planted outliers.
 The deepest article-length treatment in this series is
@@ -26,7 +26,7 @@ The deepest article-length treatment in this series is
 production fraud and anomaly stacks; the others get briefer
 coverage with pointers for further reading.</p>
 <hr />
-<h2>The five families</h2>
+<h2>The six families</h2>
 <p>Anomaly detection algorithms differ by what they consider
 &ldquo;normal&rdquo; — and by how they score deviation from it.</p>
 <h3>Statistical methods</h3>
@@ -129,10 +129,10 @@ outside its decision boundary is anomalous.</p>
 <h2>A worked example</h2>
 <p>The companion script generates 500 inlier points from a 2-D
 Gaussian mixture plus 25 planted outliers uniformly
-distributed in a larger box, and runs four anomaly detectors
+distributed in a larger box, and runs six anomaly detectors
 on the data — each scoring every point, then comparing the
 top-25 flagged anomalies against the ground-truth outliers.</p>
-<pre><code>DEMO --- Five anomaly detectors on synthetic data
+<pre><code>DEMO --- Six anomaly detectors on synthetic data
   Dataset       : 500 inliers (mixture of 2 Gaussians) + 25 outliers
   Top-25 flagged points compared against true outliers
 
@@ -168,15 +168,15 @@ the residual differences down to where the borderline
 outliers land.</p>
 <p><strong>There is no single winner.</strong> On this 2-D Gaussian-mixture
 dataset, OCSVM happens to top the precision leaderboard
-but the ranking is fragile across re-seeds. On a high-
-dimensional dataset, k-NN becomes unreliable (curse of
+but the ranking is fragile across re-seeds. On a
+high-dimensional dataset, k-NN becomes unreliable (curse of
 dimensionality) and Isolation Forest takes over. On image /
 audio data, autoencoder reconstruction MSE wins. Match the
 algorithm to the data structure.</p>
 <hr />
 <h2>Big-O and complexity</h2>
 <p>![[BIG-O TABLE IMAGE]]</p>
-<p>The five families have very different cost profiles:</p>
+<p>The six families have very different cost profiles:</p>
 <ul>
 <li><strong>Statistical methods</strong> are <code>O(n · d)</code> to fit, <code>O(d)</code> per
   query. Essentially free.</li>

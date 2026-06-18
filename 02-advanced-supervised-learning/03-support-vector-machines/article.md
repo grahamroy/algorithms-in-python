@@ -253,7 +253,7 @@ two interleaving half-moons. This is a `d = 2` problem with a
 curved boundary — exactly where the kernel trick earns its keep.
 
 **RBF beats both forest and boosting on this dataset.** With
-`C = 1.0` and default `γ`, the RBF SVM reaches `0.98` test
+`C = 1.0` and `γ = "auto"`, the RBF SVM reaches `0.98` test
 accuracy — *above* the random forest from Part 1 (`0.97`) and
 the gradient-boosted ensemble from Part 2 at their sweet spots.
 The "non-linear feature space" was infinite-dimensional in
@@ -285,7 +285,7 @@ subgradient methods, you can train a linear SVM on `n = 10⁶`,
 classification is still a sensible default in 2026.
 
 **Kernel SVM training scales badly.** The dual quadratic
-programme is `O(n² · d)` in memory (the Gram matrix is `n × n`)
+programme is `O(n²)` in memory (the Gram matrix is `n × n`)
 and roughly `O(n² · d)` to `O(n³ · d)` in compute, depending on
 the solver. For `n = 10⁴` it is fine. For `n = 10⁵` it is
 painful. For `n = 10⁶` it is impractical without
@@ -444,8 +444,8 @@ L2 regularisation, fits the moons dataset, compares against
 scikit-learn's `LinearSVC` (predictions agree on every test
 example), then trains a kernelised `SVC` with the RBF kernel
 and sweeps `C` to show the bias-variance trade-off — the
-linear model tops out at `0.87` because moons is not linearly
-separable, while the RBF kernel restores accuracy to `0.97`
+linear model tops out at `0.90` because moons is not linearly
+separable, while the RBF kernel lifts accuracy to `0.98`
 without ever explicitly computing the non-linear feature space.
 The headline insight worth pinning to the wall: **find the
 widest gap between the classes, then replace inner products

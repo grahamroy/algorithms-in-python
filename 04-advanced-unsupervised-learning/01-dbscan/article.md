@@ -4,12 +4,13 @@
 
 ---
 
-The basic Unsupervised Learning track gave us seven algorithms
+The basic Unsupervised Learning track gave us eight algorithms
 for finding structure in unlabelled data — K-Means and
 hierarchical clustering for compact blobs, PCA / t-SNE / UMAP
 for dimensionality reduction, NMF for parts-based decomposition,
 spectral clustering for arbitrary shapes, association rule
-mining for transactional sets. Six of the seven share one
+mining for transactional sets. The clustering members of that
+family share one
 quiet assumption: *you tell the algorithm how many clusters to
 look for*. K-Means demands `K` up front; hierarchical
 clustering builds a dendrogram you cut at a chosen height;
@@ -339,7 +340,7 @@ downstream analysis.
 **Single-cell biology (via HDBSCAN).** Modern single-cell
 RNA-seq pipelines often cluster cell embeddings with HDBSCAN
 rather than with K-Means or Louvain — particularly when cell
-types vary in abundance and density. The Berkeley-developed
+types vary in abundance and density. The
 `hdbscan` library, combined with UMAP for the embedding, is a
 standard pipeline.
 
@@ -365,7 +366,8 @@ DBSCAN's weaknesses are the flip side of its assumptions:
 global `eps` cannot accommodate both a dense cluster and a
 sparse one. You'll either lose the sparse cluster (everyone
 becomes noise) or merge dense clusters with their sparse
-neighbours. **HDBSCAN** (McInnes & Healy, 2017) solves this
+neighbours. **HDBSCAN** (Campello, Moulavi & Sander, 2013;
+McInnes & Healy's widely-used 2017 implementation) solves this
 by treating density at multiple scales simultaneously — the
 modern recommendation when density varies.
 
@@ -440,7 +442,7 @@ classification and density-connectedness expansion, fits it
 to the two-moons dataset with added uniform-random noise,
 compares against scikit-learn's `DBSCAN` (perfect agreement,
 ARI 1.000 between them), and shows the K-Means baseline on
-the same data for contrast (ARI 0.354 because the straight
+the same data for contrast (ARI 0.205 because the straight
 bisector mangles both moons and absorbs the noise points). The
 headline insight worth pinning to the wall: **DBSCAN defines
 clusters by density rather than centroids, discovers the

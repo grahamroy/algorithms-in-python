@@ -1,9 +1,10 @@
-<p>The basic Unsupervised Learning track gave us seven algorithms
+<p>The basic Unsupervised Learning track gave us eight algorithms
 for finding structure in unlabelled data — K-Means and
 hierarchical clustering for compact blobs, PCA / t-SNE / UMAP
 for dimensionality reduction, NMF for parts-based decomposition,
 spectral clustering for arbitrary shapes, association rule
-mining for transactional sets. Six of the seven share one
+mining for transactional sets. The clustering members of that
+family share one
 quiet assumption: <em>you tell the algorithm how many clusters to
 look for</em>. K-Means demands <code>K</code> up front; hierarchical
 clustering builds a dendrogram you cut at a chosen height;
@@ -276,7 +277,7 @@ downstream analysis.</p>
 <p><strong>Single-cell biology (via HDBSCAN).</strong> Modern single-cell
 RNA-seq pipelines often cluster cell embeddings with HDBSCAN
 rather than with K-Means or Louvain — particularly when cell
-types vary in abundance and density. The Berkeley-developed
+types vary in abundance and density. The
 <code>hdbscan</code> library, combined with UMAP for the embedding, is a
 standard pipeline.</p>
 <p><strong>As a noise filter.</strong> Run DBSCAN, throw away the noise
@@ -296,7 +297,8 @@ fail, the next sections discuss alternatives.</p>
 global <code>eps</code> cannot accommodate both a dense cluster and a
 sparse one. You&rsquo;ll either lose the sparse cluster (everyone
 becomes noise) or merge dense clusters with their sparse
-neighbours. <strong>HDBSCAN</strong> (McInnes &amp; Healy, 2017) solves this
+neighbours. <strong>HDBSCAN</strong> (Campello, Moulavi &amp; Sander, 2013;
+McInnes &amp; Healy&rsquo;s widely-used 2017 implementation) solves this
 by treating density at multiple scales simultaneously — the
 modern recommendation when density varies.</p>
 <p><strong>In high dimensions.</strong> Above ~50 dimensions, Euclidean
@@ -354,7 +356,7 @@ classification and density-connectedness expansion, fits it
 to the two-moons dataset with added uniform-random noise,
 compares against scikit-learn&rsquo;s <code>DBSCAN</code> (perfect agreement,
 ARI 1.000 between them), and shows the K-Means baseline on
-the same data for contrast (ARI 0.354 because the straight
+the same data for contrast (ARI 0.205 because the straight
 bisector mangles both moons and absorbs the noise points). The
 headline insight worth pinning to the wall: <strong>DBSCAN defines
 clusters by density rather than centroids, discovers the

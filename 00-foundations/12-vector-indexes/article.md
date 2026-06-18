@@ -85,7 +85,7 @@ We will look at each in turn, then how they combine.
 
 **Hierarchical Navigable Small World** (HNSW) is the highest-quality
 algorithm for medium-scale dense ANN. It is the default in most
-modern vector databases (Qdrant, Weaviate, Milvus, LanceDB) and the
+modern vector databases (Qdrant, Weaviate, Milvus) and the
 engine inside FAISS's `IndexHNSWFlat`.
 
 The structure is a *multi-layer* graph. Every vector lives at layer
@@ -357,7 +357,7 @@ embeds the user's question, runs an ANN search over a vector
 database, and feeds the top-k retrieved chunks to the LLM as
 context. The vector database is HNSW or IVF-PQ. The embedding
 model is something like `text-embedding-3-small` (OpenAI),
-`embedding-001` (Cohere), or one of the open-source BGE / GTE
+`embed-english-v3` (Cohere), or one of the open-source BGE / GTE
 families. The full pipeline — embedding, ANN search, LLM context
 construction — is the dominant pattern for grounding LLMs in
 private data.
@@ -471,8 +471,8 @@ Run it with:
 python vector_indexes.py
 ```
 
-It needs `numpy` — the same single dependency we used in Parts 1-3
-and 11. The script implements brute-force kNN, simplified IVF, PQ,
+It needs `numpy` — the same dependency we used in Parts 1-3 (Part 11
+added `scipy`). The script implements brute-force kNN, simplified IVF, PQ,
 and a single-layer NSW graph, all from scratch, and benchmarks
 each on a 50,000-vector clustered corpus in 128 dimensions. The
 takeaways worth pinning to the wall: **IVF achieves perfect

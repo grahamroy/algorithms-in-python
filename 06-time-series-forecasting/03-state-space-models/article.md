@@ -81,8 +81,9 @@ have a specific model.
 Given observations `y_{1:t}`, what is the posterior over the
 current state `x_t`? In a linear-Gaussian model the answer is
 itself Gaussian, and the **Kalman filter** computes its mean
-and covariance recursively in `O(d²)` per time step (where `d`
-is the state dimension).
+and covariance recursively in `O(d³)` per time step for a
+dense transition matrix (where `d` is the state dimension);
+structured/sparse transitions bring this down toward `O(d²)`.
 
 Two steps per observation:
 
@@ -126,14 +127,17 @@ The most common state-space formulation in applied work
 decomposes a series into interpretable components:
 
 ```
-y_t = level_t + trend_t + season_t + cycle_t + irregular_t
+y_t = level_t + season_t + cycle_t + irregular_t
 ```
 
 Each component has its own dynamics:
 
-- **Level**: `level_t = level_{t-1} + η_t` (random walk).
-- **Trend**: `trend_t = trend_{t-1} + ζ_t` (slope evolves
-  stochastically).
+- **Level + trend** (the *local linear trend*): the level is a
+  random walk *with drift*, and the drift (slope) itself
+  evolves stochastically:
+  `level_t = level_{t-1} + slope_{t-1} + η_t`,
+  `slope_t = slope_{t-1} + ζ_t`. The slope feeds the level; it
+  is not added to `y_t` directly.
 - **Season**: sum of seasonal indices that integrate to zero
   over one period, with their own noise.
 - **Cycle**: a damped sinusoid for non-seasonal periodic
@@ -185,7 +189,7 @@ implementations are state-space.
 
 The companion script fits an **Unobserved Components Model**
 to the airline-passengers dataset with local linear trend +
-trigonometric seasonality, and compares the forecast against
+dummy-variable seasonality, and compares the forecast against
 ARIMA, SARIMA, and Holt-Winters from the previous two
 articles.
 
@@ -251,7 +255,8 @@ ARIMA and ETS need imputation upstream.
 State-space models trade interpretability and flexibility
 for higher per-iteration cost:
 
-**Kalman filter** is `O(d²)` per time step where `d` is the
+**Kalman filter** is `O(d³)` per time step (dense transition)
+where `d` is the
 state dimension. For UCM with trend (2 states) + 11 seasonal
 states the total state is small, sub-millisecond per step.
 
@@ -370,14 +375,15 @@ python state_space.py
 
 It needs `numpy`, `pandas`, and `statsmodels`. The script
 fits an Unobserved Components Model with local linear trend
-and trigonometric seasonality to the airline-passengers
+and dummy-variable seasonality to the airline-passengers
 dataset, decomposes the series into its latent components,
 and compares forecast accuracy against ARIMA, SARIMA, and
 Holt-Winters from the previous two articles. The headline
 insight worth pinning to the wall: **state-space models
 write a time series as a linear-Gaussian latent state plus
 an observation equation; the Kalman filter does optimal
-Bayesian inference recursively in O(d²) per step; ARIMA and
+Bayesian inference recursively (O(d³) per step for a dense
+transition); ARIMA and
 ETS are special cases of this framework, and the explicit
 decomposition makes state-space the right tool when
 interpretability matters as much as forecast accuracy**.

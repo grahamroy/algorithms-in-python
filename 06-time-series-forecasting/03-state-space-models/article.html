@@ -63,8 +63,9 @@ have a specific model.</p>
 <p>Given observations <code>y_{1:t}</code>, what is the posterior over the
 current state <code>x_t</code>? In a linear-Gaussian model the answer is
 itself Gaussian, and the <strong>Kalman filter</strong> computes its mean
-and covariance recursively in <code>O(d²)</code> per time step (where <code>d</code>
-is the state dimension).</p>
+and covariance recursively in <code>O(d³)</code> per time step for a
+dense transition matrix (where <code>d</code> is the state dimension);
+structured/sparse transitions bring this down toward <code>O(d²)</code>.</p>
 <p>Two steps per observation:</p>
 <p><strong>Predict</strong> (given <code>p(x_{t-1} | y_{1:t-1}) = N(μ_{t-1}, P_{t-1})</code>):</p>
 <pre><code>μ̄_t = A · μ_{t-1}
@@ -94,13 +95,16 @@ Bayesian inference.</p>
 <h2>Unobserved Components Models</h2>
 <p>The most common state-space formulation in applied work
 decomposes a series into interpretable components:</p>
-<pre><code>y_t = level_t + trend_t + season_t + cycle_t + irregular_t
+<pre><code>y_t = level_t + season_t + cycle_t + irregular_t
 </code></pre>
 <p>Each component has its own dynamics:</p>
 <ul>
-<li><strong>Level</strong>: <code>level_t = level_{t-1} + η_t</code> (random walk).</li>
-<li><strong>Trend</strong>: <code>trend_t = trend_{t-1} + ζ_t</code> (slope evolves
-  stochastically).</li>
+<li><strong>Level + trend</strong> (the <em>local linear trend</em>): the level is a
+  random walk <em>with drift</em>, and the drift (slope) itself
+  evolves stochastically:
+  <code>level_t = level_{t-1} + slope_{t-1} + η_t</code>,
+  <code>slope_t = slope_{t-1} + ζ_t</code>. The slope feeds the level; it
+  is not added to <code>y_t</code> directly.</li>
 <li><strong>Season</strong>: sum of seasonal indices that integrate to zero
   over one period, with their own noise.</li>
 <li><strong>Cycle</strong>: a damped sinusoid for non-seasonal periodic
@@ -142,7 +146,7 @@ implementations are state-space.</p>
 <h2>A worked example</h2>
 <p>The companion script fits an <strong>Unobserved Components Model</strong>
 to the airline-passengers dataset with local linear trend +
-trigonometric seasonality, and compares the forecast against
+dummy-variable seasonality, and compares the forecast against
 ARIMA, SARIMA, and Holt-Winters from the previous two
 articles.</p>
 <pre><code>DEMO 1 --- UCM (local linear trend + seasonal) on airline data
@@ -193,7 +197,8 @@ ARIMA and ETS need imputation upstream.</p>
 <p>![[BIG-O TABLE IMAGE]]</p>
 <p>State-space models trade interpretability and flexibility
 for higher per-iteration cost:</p>
-<p><strong>Kalman filter</strong> is <code>O(d²)</code> per time step where <code>d</code> is the
+<p><strong>Kalman filter</strong> is <code>O(d³)</code> per time step (dense transition)
+where <code>d</code> is the
 state dimension. For UCM with trend (2 states) + 11 seasonal
 states the total state is small, sub-millisecond per step.</p>
 <p><strong>Full forward filter pass</strong> is <code>O(T · d²)</code>. For <code>T = 10⁴</code>
@@ -280,14 +285,15 @@ python state_space.py
 </code></pre>
 <p>It needs <code>numpy</code>, <code>pandas</code>, and <code>statsmodels</code>. The script
 fits an Unobserved Components Model with local linear trend
-and trigonometric seasonality to the airline-passengers
+and dummy-variable seasonality to the airline-passengers
 dataset, decomposes the series into its latent components,
 and compares forecast accuracy against ARIMA, SARIMA, and
 Holt-Winters from the previous two articles. The headline
 insight worth pinning to the wall: <strong>state-space models
 write a time series as a linear-Gaussian latent state plus
 an observation equation; the Kalman filter does optimal
-Bayesian inference recursively in O(d²) per step; ARIMA and
+Bayesian inference recursively (O(d³) per step for a dense
+transition); ARIMA and
 ETS are special cases of this framework, and the explicit
 decomposition makes state-space the right tool when
 interpretability matters as much as forecast accuracy</strong>.</p>

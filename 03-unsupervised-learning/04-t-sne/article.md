@@ -130,8 +130,10 @@ clean form:
 
 Iterate until convergence (typically ~1000 iterations with
 momentum and a few standard heuristics like "early exaggeration"
-that multiply the high-d probabilities by 4× for the first 250
-iterations to encourage tight cluster formation).
+that multiply the high-d probabilities by 4× early in training —
+the canonical implementations use the first 250 iterations; our
+from-scratch script uses 100 — to encourage tight cluster
+formation).
 
 ---
 
@@ -197,16 +199,16 @@ DEMO 1 --- t-SNE from scratch on the digits dataset
   Subsample for speed : 300 points
   Perplexity          : 30
   Iterations          : 600
-  Final KL divergence : 0.411
-  KNN accuracy in 2D  : 0.910  (15-NN classifier on the embedding)
+  Final KL divergence : 0.417
+  KNN accuracy in 2D  : 0.897  (15-NN classifier on the embedding)
 ```
 
 ```
 DEMO 2 --- Same data (full 1797), scikit-learn TSNE (Barnes-Hut)
   Perplexity          : 30
   Iterations          : 1000
-  Final KL divergence : 0.755
-  KNN accuracy in 2D  : 0.971
+  Final KL divergence : 0.754
+  KNN accuracy in 2D  : 0.969
 ```
 
 ```

@@ -209,8 +209,8 @@ potential energy; introduce momentum variables and simulate
 Hamiltonian dynamics with the leapfrog integrator. Long
 trajectories explore the parameter space efficiently —
 much higher effective sample size than random-walk
-Metropolis. Requires gradient evaluations of the log-
-posterior, which is why it works well with automatic
+Metropolis. Requires gradient evaluations of the
+log-posterior, which is why it works well with automatic
 differentiation (the modern PPL stack).
 
 **No-U-Turn Sampler (NUTS)** (Hoffman & Gelman, 2014). HMC
@@ -268,8 +268,8 @@ inference are the standard tool. Used routinely in
 education research, public health, marketing analytics.
 
 **Astronomy and cosmology.** Inferring cosmological
-parameters from CMB data, exoplanet detection, gravitational-
-wave parameter estimation — all rely on MCMC because the
+parameters from CMB data, exoplanet detection,
+gravitational-wave parameter estimation — all rely on MCMC because the
 posteriors are non-Gaussian and high-dimensional.
 
 **Phylogenetics.** Inferring evolutionary trees from genetic
@@ -347,11 +347,11 @@ The full script is on GitHub — grab it and run it:
 Run it with:
 
 ```bash
-pip install numpy scipy
+pip install numpy
 python mcmc.py
 ```
 
-It needs `numpy` and `scipy`. The script implements
+It needs only `numpy`. The script implements
 Metropolis-Hastings from scratch, runs 4 chains of 10,000
 samples on a 2-D banana-shaped posterior, computes the
 Gelman-Rubin R-hat statistic for convergence, the

@@ -28,8 +28,8 @@ single neural network architecture that:</p>
 <p>On the M5 Walmart-sales forecasting competition (2020), the
 winning entries were gradient-boosted trees, but the top
 deep-learning approaches were all variants of TFT or its
-contemporaries (DeepAR, N-BEATS). The 2023 Nixtla-led
-&ldquo;NeuralForecast&rdquo; benchmark study showed TFT and its
+contemporaries (DeepAR, N-BEATS). The Nixtla NeuralForecast
+benchmark studies showed TFT and its
 descendants matching or beating classical methods on the
 majority of business forecasting tasks once <code>n_series &gt; 100</code>.</p>
 <p>This article builds TFT from first principles. We will walk
@@ -70,8 +70,8 @@ interpretable attention-weight pattern showing <em>when</em> in the
 history matters most.</p>
 <h3>Gated Residual Networks (GRN) and Static Covariate Encoders</h3>
 <p>Throughout the architecture, gated residual networks
-(Goodfellow et al.-style gating) let the model bypass
-unnecessary computations. Static covariates (per-series
+(built on the Gated Linear Units of Dauphin et al., 2017)
+let the model bypass unnecessary computations. Static covariates (per-series
 identifiers, category) feed into separate encoders that
 condition the entire prediction.</p>
 <h3>Quantile output</h3>
@@ -103,7 +103,7 @@ mostly cannot at all.</p>
 <p>The downside: TFT needs <strong>lots of data</strong> (or many series),
 <strong>GPUs</strong> for reasonable training time, and a <strong>lot of
 engineering effort</strong> to feed it the right covariates and tune
-hyperparameters. The 2024 NeuralForecast benchmarks show TFT
+hyperparameters. The NeuralForecast benchmarks show TFT
 is <em>not</em> universally better — on small datasets it loses to
 SARIMA, on highly idiosyncratic series it loses to per-series
 fits. It wins specifically when you have many related series

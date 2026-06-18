@@ -15,15 +15,15 @@ at.</p>
 <p>There are three of these structures that every ML and infrastructure
 engineer should know:</p>
 <ul>
-<li><strong>Bloom filters</strong> — answer <em>"have I seen this item?"</em> with one-sided
+<li><strong>Bloom filters</strong> — answer <em>&ldquo;have I seen this item?&rdquo;</em> with one-sided
   false positives. The structure that web crawlers, database query
   planners, and CDN caches use to avoid pointless work.</li>
-<li><strong>Count-Min Sketch</strong> — answer <em>"how often has this item appeared?"</em>
+<li><strong>Count-Min Sketch</strong> — answer <em>&ldquo;how often has this item appeared?&rdquo;</em>
   with bounded over-estimation. Behind every heavy-hitter detector in
   ad systems, network monitors, and recommendation pipelines.</li>
-<li><strong>HyperLogLog</strong> — answer <em>"how many distinct items have I seen?"</em>
+<li><strong>HyperLogLog</strong> — answer <em>&ldquo;how many distinct items have I seen?&rdquo;</em>
   with a few KB of memory regardless of stream size. The shape inside
-  Redis <code>PFCOUNT</code>, BigQuery's <code>APPROX_COUNT_DISTINCT</code>, and Presto.</li>
+  Redis <code>PFCOUNT</code>, BigQuery&rsquo;s <code>APPROX_COUNT_DISTINCT</code>, and Presto.</li>
 </ul>
 <p>All three rely on the same trick: pass the item through one or more
 hash functions and aggregate the <em>signatures</em> rather than the items
@@ -41,7 +41,7 @@ throw the item away, and answer questions from the summary.</p>
 <pre><code>ε (epsilon)  — the accuracy you want
 δ (delta)    — the probability that you exceed ε
 </code></pre>
-<p>The structure's memory grows logarithmically (or in some cases not at
+<p>The structure&rsquo;s memory grows logarithmically (or in some cases not at
 all) with the <em>number of items</em>, but inversely with <code>ε</code> and <code>δ</code>. Want
 twice the accuracy? Pay roughly twice the memory. Want a billion
 items in your stream? Pay nothing extra.</p>
@@ -52,7 +52,7 @@ HLL is wrong by ~1%, but for most decisions — <em>do we need to scale
 the cluster?</em>, <em>which cohort is growing fastest?</em>, <em>is the dedup
 ratio holding up?</em> — that 1% does not matter.</p>
 <hr />
-<h2>Bloom filters — "have I seen this?"</h2>
+<h2>Bloom filters — &ldquo;have I seen this?&rdquo;</h2>
 <p>A Bloom filter is a fixed-size <strong>bit array</strong> of <code>m</code> bits, plus <code>k</code>
 independent hash functions. To insert an item, hash it <code>k</code> times,
 take each hash modulo <code>m</code>, and set those <code>k</code> bits to 1. To check
@@ -66,13 +66,13 @@ membership, hash again and read those same <code>k</code> bits.</p>
 </code></pre>
 <p>If <em>any</em> of the <code>k</code> bits is 0, the item is <strong>definitely not in the
 set</strong>. If <em>all</em> <code>k</code> bits are 1, the item is <strong>probably in the set</strong> —
-but might be a false positive, because some other items' insertions
+but might be a false positive, because some other items&rsquo; insertions
 could have collectively set those same bits. Crucially, there are no
 false negatives. If you have inserted an item, the filter will say
 yes when asked.</p>
-<p>That asymmetry is the entire point. <em>"Probably yes, definitely no"</em>
-is exactly what you want for a cache pre-check, a "have I crawled
-this URL" guard, or a "does the database row exist on disk" filter.
+<p>That asymmetry is the entire point. <em>&ldquo;Probably yes, definitely no&rdquo;</em>
+is exactly what you want for a cache pre-check, a &ldquo;have I crawled
+this URL&rdquo; guard, or a &ldquo;does the database row exist on disk&rdquo; filter.
 You only fall through to the expensive lookup when the Bloom says
 yes; when it says no, you skip the work entirely.</p>
 <h3>The math</h3>
@@ -108,24 +108,24 @@ what it claims.</p>
 <p><strong>Database row existence checks.</strong> Cassandra, RocksDB, LevelDB, and
 HBase keep a Bloom filter per SSTable on disk. Before reading the
 table to look up a key, the storage engine checks the Bloom filter
-in memory. If it says "no," the disk read is skipped entirely. The
+in memory. If it says &ldquo;no,&rdquo; the disk read is skipped entirely. The
 saved IOs are the difference between a system that scales to
 petabytes and one that does not.</p>
 <p><strong>Web crawlers.</strong> Common Crawl and any production crawler keeps a
 Bloom filter of URLs already fetched. A few hundred bits per URL
 across a billion-URL frontier is comfortably in RAM; the equivalent
 hash set is not.</p>
-<p><strong>CDN cache pre-checks.</strong> "Has this content been cached at the
-edge?" gets asked billions of times per day per data centre. Bloom
-filters in front of the cache layer answer "definitely no" cheaply
+<p><strong>CDN cache pre-checks.</strong> &ldquo;Has this content been cached at the
+edge?&rdquo; gets asked billions of times per day per data centre. Bloom
+filters in front of the cache layer answer &ldquo;definitely no&rdquo; cheaply
 and skip the round-trip to the cache server.</p>
 <p><strong>Spell checkers.</strong> Older Unix <code>spell</code> used a Bloom-filter-like
-structure (Bloom's original 1970 paper proposed exactly this use
+structure (Bloom&rsquo;s original 1970 paper proposed exactly this use
 case). Even today, many tokenisers and lexicon checks in NLP
-pipelines use Bloom-style filters to do fast "is this a known word?"
+pipelines use Bloom-style filters to do fast &ldquo;is this a known word?&rdquo;
 membership tests over million-word vocabularies.</p>
 <hr />
-<h2>Count-Min Sketch — "how often have I seen this?"</h2>
+<h2>Count-Min Sketch — &ldquo;how often have I seen this?&rdquo;</h2>
 <p>A Bloom filter answers a yes/no question. <strong>Count-Min Sketch</strong> (CMS)
 generalises the same idea to counts. It is a <code>d × w</code> matrix of
 counters, plus <code>d</code> independent hash functions, one per row.</p>
@@ -142,7 +142,7 @@ counters, plus <code>d</code> independent hash functions, one per row.</p>
 To estimate the count of an item, hash it the same way and return
 the <strong>minimum</strong> of the <code>d</code> cells.</p>
 <p>The minimum is the magic. Each cell over-counts because of
-collisions (other items' increments land in the same cell). But the
+collisions (other items&rsquo; increments land in the same cell). But the
 <em>minimum across rows</em> is the cell that suffered the fewest
 collisions. So CMS gives you an estimate that is always ≥ the true
 count and almost never much larger.</p>
@@ -179,13 +179,13 @@ Top-10 heavy hitters (true vs CMS-estimated):
 </code></pre>
 <p>On the heavy tail, CMS returns essentially exact counts because
 collisions are diluted across thousands of cells. On the long tail,
-estimates are slightly inflated, but for "find the heavy hitters"
+estimates are slightly inflated, but for &ldquo;find the heavy hitters&rdquo;
 queries — which is what CMS is optimised for — the rank ordering is
 preserved.</p>
 <h3>Where it shows up</h3>
 <p><strong>Heavy-hitters in ad systems.</strong> Find the top-k advertisers, the
 top-k publishers, the top-k creatives by impressions. CMS plus a
-priority-queue of size <code>k</code> (Part 7's heap) gives you streaming
+priority-queue of size <code>k</code> (Part 7&rsquo;s heap) gives you streaming
 top-k in fixed memory.</p>
 <p><strong>Network monitoring.</strong> Detect heavy flows in a router that sees a
 million packets per second. The sketch sits in the data plane,
@@ -194,20 +194,20 @@ top hitters periodically.</p>
 <p><strong>Recommendation systems.</strong> Estimate item-item co-occurrence counts
 for collaborative filtering when the item catalogue is too large to
 materialise the full matrix. The same trick powers some of the
-candidate-generation passes in Spotify's and YouTube's recommender
+candidate-generation passes in Spotify&rsquo;s and YouTube&rsquo;s recommender
 stacks.</p>
 <p><strong>Online ML feature stats.</strong> When training online models on streams
-you often want recent feature frequencies — <em>"how often has this
-user_id appeared in the last hour?"</em> CMS gives you that in fixed
+you often want recent feature frequencies — <em>&ldquo;how often has this
+user_id appeared in the last hour?&rdquo;</em> CMS gives you that in fixed
 memory regardless of how many user IDs exist, and several large
 recommender systems use CMS for exactly this.</p>
 <hr />
-<h2>HyperLogLog — "how many distinct items have I seen?"</h2>
+<h2>HyperLogLog — &ldquo;how many distinct items have I seen?&rdquo;</h2>
 <p>The third question is the cardinality question: not <em>which</em> items
 appeared, but <em>how many distinct ones</em>. Naively this needs O(n)
 memory — store every distinct item — but <strong>HyperLogLog</strong> (HLL) gets
 a few-percent estimate in O(log log n) bits. That is not a typo; the
-"log log" in the name is the asymptotic memory complexity.</p>
+&ldquo;log log&rdquo; in the name is the asymptotic memory complexity.</p>
 <p>The intuition is shockingly simple. Hash every item to a uniformly
 random 64-bit value and look at the <strong>leading zeros</strong>. If you have
 seen many distinct items, you will have seen at least one that
@@ -216,7 +216,7 @@ probability that a random hash starts with <code>k</code> zeros is <code>2^(-k)<
 So the maximum leading-zero count <code>L</code> you have observed gives you a
 ballpark estimate of <code>2^L</code> for the cardinality.</p>
 <p>That estimator is high-variance, so HLL splits the hash space into
-<code>m</code> buckets ("registers"), tracks the maximum leading-zero count in
+<code>m</code> buckets (&ldquo;registers&rdquo;), tracks the maximum leading-zero count in
 each, and combines them via a harmonic mean. The result is an
 estimator whose <strong>standard error</strong> is approximately <code>1.04 / sqrt(m)</code>.
 With <code>m = 16384</code> (16 kilobytes) you get about 0.8% error on
@@ -254,15 +254,15 @@ structure on the planet with that memory profile for this problem.</p>
 <p><strong>Redis <code>PFCOUNT</code>.</strong> Redis ships HLL as a first-class data type.
 <code>PFADD</code> adds an item, <code>PFCOUNT</code> returns the cardinality estimate,
 and <code>PFMERGE</code> unions two HLLs. Every analytics dashboard built on
-Redis with a "unique users today" widget is reading from HLLs.</p>
+Redis with a &ldquo;unique users today&rdquo; widget is reading from HLLs.</p>
 <p><strong>BigQuery <code>APPROX_COUNT_DISTINCT</code> / Presto / Trino.</strong> Distributed
 query engines use HLL whenever you write <code>COUNT(DISTINCT x)</code> because
 the exact answer is too expensive at the data sizes they handle.
 The query planner usually rewrites it under a flag if the column
 cardinality is large enough.</p>
 <p><strong>Site analytics.</strong> Google Analytics, Mixpanel, Amplitude, Plausible
-— every product analytics tool that reports "monthly active users"
-or "unique events" computes those numbers via HLL or a close
+— every product analytics tool that reports &ldquo;monthly active users&rdquo;
+or &ldquo;unique events&rdquo; computes those numbers via HLL or a close
 relative.</p>
 <p><strong>ML feature engineering at scale.</strong> Counting distinct values of
 high-cardinality features (user IDs, ad IDs, search queries) is one
@@ -287,14 +287,14 @@ you that knob.</p>
 <hr />
 <h2>Real-world ML and AI connections</h2>
 <p>These structures show up in surprising places once you start looking.</p>
-<p><strong>Feature hashing in ML.</strong> scikit-learn's <code>HashingVectorizer</code> and
-Vowpal Wabbit's feature handling both use a hashing trick that is
+<p><strong>Feature hashing in ML.</strong> scikit-learn&rsquo;s <code>HashingVectorizer</code> and
+Vowpal Wabbit&rsquo;s feature handling both use a hashing trick that is
 algorithmically a Bloom-filter-style insertion: hash the feature
 name, mod by a vocabulary size, accumulate values at that index. The
 collisions are noise, but with a large enough vocabulary the noise
 washes out and you avoid storing an explicit token-to-index map. The
-exact same trick is what made the original "feature hashing for ad
-prediction at scale" papers practical.</p>
+exact same trick is what made the original &ldquo;feature hashing for ad
+prediction at scale&rdquo; papers practical.</p>
 <p><strong>Locality-Sensitive Hashing (LSH) for ANN search.</strong> LSH is the
 probabilistic cousin of vector indexes — instead of building a graph
 or KD-tree (Parts 8 and the upcoming Part 12), you hash vectors so
@@ -307,9 +307,9 @@ RAG systems.</p>
 <p><strong>MinHash for set similarity at scale.</strong> MinHash estimates the
 Jaccard similarity between two sets by hashing each element and
 keeping the minimum hash value across the set. Compare two MinHashes
-and you get an estimate of the underlying sets' similarity, in
+and you get an estimate of the underlying sets&rsquo; similarity, in
 constant time regardless of set size. Used heavily in LLM
-training-data deduplication: Common Crawl's near-duplicate filter is built
+training-data deduplication: Common Crawl&rsquo;s near-duplicate filter is built
 on MinHash, and so are the dedup steps in the C4, Pile, and RedPajama
 corpora.</p>
 <p><strong>Streaming dedup for LLM training data.</strong> Bloom filters and MinHash
@@ -325,9 +325,9 @@ sketches to estimate per-trajectory frequencies for importance
 weighting, especially in distributed RL where the replay buffer is
 sharded across workers and exact counts would require coordination.</p>
 <p><strong>Rate limiting at scale.</strong> Token-bucket rate limiters are exact;
-sliding-window rate limiters at scale (think OpenAI's API limits,
-Cloudflare's edge limits) often use Count-Min Sketches per
-(user, time-window) so that the rate limiter itself doesn't become
+sliding-window rate limiters at scale (think OpenAI&rsquo;s API limits,
+Cloudflare&rsquo;s edge limits) often use Count-Min Sketches per
+(user, time-window) so that the rate limiter itself doesn&rsquo;t become
 the bottleneck. A few KB per node, a few hundred million decisions
 per second.</p>
 <p><strong>Cardinality-aware query planning.</strong> Postgres and modern OLAP
@@ -340,17 +340,17 @@ materialising a sort or distinct-aggregate.</p>
 <p>These structures are powerful, but they have sharp edges.</p>
 <p><strong>When you need the exact answer.</strong> Audit logs, billing, financial
 reconciliation, anything that touches money or compliance — use
-exact structures. A Bloom filter that says "yes" to a transaction
+exact structures. A Bloom filter that says &ldquo;yes&rdquo; to a transaction
 that never happened is a bug, not a feature.</p>
 <p><strong>When the false positive (or over-estimate) propagates.</strong> If your
 downstream pipeline cannot tolerate occasional wrong answers, do not
-introduce them upstream. The "small bounded error" property of these
+introduce them upstream. The &ldquo;small bounded error&rdquo; property of these
 structures is only useful if downstream code treats the answers as
 estimates.</p>
 <p><strong>When you cannot tune the parameters honestly.</strong> Bloom filters
 degrade catastrophically once you exceed the design <code>n</code>. Count-Min
-becomes useless if <code>w</code> is much smaller than the vocabulary's
-heavy-tailed range. HLL has a "small cardinality" regime where it
+becomes useless if <code>w</code> is much smaller than the vocabulary&rsquo;s
+heavy-tailed range. HLL has a &ldquo;small cardinality&rdquo; regime where it
 under-estimates and needs a switchover to linear counting. Each
 structure has a sweet spot; be sure you are inside it.</p>
 <p><strong>When the data fits in memory anyway.</strong> A <code>set</code> of ten thousand
@@ -385,7 +385,8 @@ algorithms. Linear regression, then everything that builds on it.</p>
 <p>Run it with:</p>
 <pre><code class="language-bash">python probabilistic_data_structures.py
 </code></pre>
-<p>It finishes in well under a second on a laptop. The companion script
+<p>It finishes in a few seconds on a laptop — SHA-256 hashing of over a
+million items dominates the runtime. The companion script
 builds all three structures from stdlib only — Bloom filter on a
 million items measuring observed vs theoretical false-positive rate,
 Count-Min Sketch over a Zipfian word stream recovering top-10 heavy

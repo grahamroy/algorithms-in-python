@@ -29,7 +29,7 @@ principles. We will define the <strong>ELBO</strong> — the lower bound
 that VI maximises — derive the <strong>mean-field</strong> algorithm in
 which <code>q</code> factorises across parameters, implement
 coordinate-ascent VI on a Bayesian linear regression
-problem with a non-conjugate Gaussian prior, compare against
+problem with Gaussian priors, compare against
 MCMC and against the exact analytical posterior, and finish
 with the <strong>reparameterisation trick</strong> and amortised inference
 that power modern deep VI methods like variational
@@ -248,10 +248,10 @@ beyond statistical association to causal identification.</p>
 <p>The full script is on GitHub — grab it and run it:</p>
 <p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/05-bayesian-probabilistic-causal/03-variational-inference/variational_inference.py"><strong>variational_inference.py</strong></a></p>
 <p>Run it with:</p>
-<pre><code class="language-bash">pip install numpy scipy
+<pre><code class="language-bash">pip install numpy
 python variational_inference.py
 </code></pre>
-<p>It needs <code>numpy</code> and <code>scipy</code>. The script fits Bayesian
+<p>It needs only <code>numpy</code>. The script fits Bayesian
 linear regression three ways — exact closed-form posterior,
 mean-field VI by coordinate ascent on the ELBO, and MCMC
 with Metropolis-Hastings — and verifies all three agree on

@@ -9,11 +9,11 @@ organise their contents spatially: arrays in contiguous memory, linked lists
 chained with pointers, graphs pointing at whatever they like. This article is
 about a data structure that does something stranger. Instead of searching for
 where a key is stored, a <strong>hash table</strong> <em>computes</em> the location directly from
-the key. It is the answer to <em>"can we look things up without actually
-looking?"</em>, and the answer turns out to be yes, on average, in constant time.</p>
+the key. It is the answer to <em>&ldquo;can we look things up without actually
+looking?&rdquo;</em>, and the answer turns out to be yes, on average, in constant time.</p>
 <p>This is what makes Python feel fast. Every <code>d[key]</code> access is a hash table
 lookup. Every <code>set</code> membership test is a hash table lookup. Every attribute
-access on an object is <em>also</em> a hash table lookup, because the object's
+access on an object is <em>also</em> a hash table lookup, because the object&rsquo;s
 <code>__dict__</code> is a hash table. You are using them hundreds of times a second.</p>
 <hr />
 <h2>The lookup problem</h2>
@@ -24,7 +24,7 @@ find a match — <strong>O(n)</strong>. If the array is sorted, you can do binar
 instead, finishing in about 24 comparisons — <strong>O(log n)</strong> — but you pay to
 keep it sorted on every insert.</p>
 <p>A hash table takes a completely different route. Instead of searching for the
-key, it <em>computes</em> the key's address. You hand a hash function the string
+key, it <em>computes</em> the key&rsquo;s address. You hand a hash function the string
 <code>"user_42991"</code> and it hands back an integer, which you reduce into a slot
 index in a fixed-size array. You go straight to that slot. No scanning, no
 tree walks, <strong>O(1)</strong> average case.</p>
@@ -46,7 +46,7 @@ tables use simple, fast, non-cryptographic mixers.</p>
 <p>A subtler property is the <strong>avalanche effect</strong>: flipping one bit of the input
 should change roughly half the bits of the output. Without it, similar keys
 (<code>"user_1"</code>, <code>"user_2"</code>, <code>"user_3"</code>) pile into adjacent slots and lookups
-slow down. Python's <code>hash()</code> demonstrates the effect nicely:</p>
+slow down. Python&rsquo;s <code>hash()</code> demonstrates the effect nicely:</p>
 <pre><code>One-character change, completely different hash:
   hash(  'password') = -912499362905713490
   hash(  'Password') = 4071344120751255091
@@ -55,7 +55,7 @@ slow down. Python's <code>hash()</code> demonstrates the effect nicely:</p>
 </code></pre>
 <p>Four strings that differ in one character each, four completely unrelated
 integers. That is what you want.</p>
-<h3>Python's <code>hash()</code> built-in</h3>
+<h3>Python&rsquo;s <code>hash()</code> built-in</h3>
 <p>Every hashable object in Python has a <code>__hash__</code> method, and <code>hash(x)</code> calls
 it. The rules are worth memorising:</p>
 <ul>
@@ -64,7 +64,7 @@ it. The rules are worth memorising:</p>
   quirk — <code>-1</code> is reserved as an error sentinel internally).</li>
 <li><code>hash("hello")</code> gives a big signed integer that changes every time you
   restart Python.</li>
-<li><code>hash((1, 2, 3))</code> combines the hashes of the tuple's elements.</li>
+<li><code>hash((1, 2, 3))</code> combines the hashes of the tuple&rsquo;s elements.</li>
 <li><code>hash(3.14)</code>, <code>hash(True)</code>, <code>hash(None)</code> all work.</li>
 </ul>
 <p>Here is the output from the companion script:</p>
@@ -88,7 +88,7 @@ float hashes will be the same.</p>
 <p>Until Python 3.2, the hash of a given string was the same in every process,
 forever. That let attackers mount a <strong>hash DoS</strong> attack: submit thousands of
 request parameters whose keys all hashed to the same bucket of the web
-framework's dict, forcing O(n^2) work on a single malicious request. A few
+framework&rsquo;s dict, forcing O(n^2) work on a single malicious request. A few
 hundred kilobytes of crafted input could tie up a server.</p>
 <p>From Python 3.3 onwards, every process picks a random seed at startup
 (<code>PYTHONHASHSEED</code>, pinnable via the environment variable of the same name).
@@ -110,7 +110,7 @@ def hash2(key):
 the start — <strong>O(n)</strong>, strictly worse than an unsorted array because you also
 pay for a pointless hash. <code>hash2</code> is less obviously broken but still
 catastrophic: real string data clusters heavily by length, so you get a
-handful of enormous buckets and everything else empty. The companion script's
+handful of enormous buckets and everything else empty. The companion script&rsquo;s
 collision stress test shows the first one in action.</p>
 <hr />
 <h2>Collisions</h2>
@@ -131,7 +131,7 @@ the next empty slot: <code>i+1</code>, <code>i+2</code>, and so on (linear probi
 (quadratic probing), or a position dictated by a second hash function (double
 hashing). Lookups follow the same probe sequence until they hit the key or an
 empty slot.</p>
-<p>CPython's <code>dict</code> and <code>set</code> both use open addressing with a clever
+<p>CPython&rsquo;s <code>dict</code> and <code>set</code> both use open addressing with a clever
 <em>perturbation</em> sequence that mixes in high bits of the hash on each probe,
 avoiding the cache-unfriendly clustering linear probing suffers from. You
 get great cache locality; deletion is trickier (you cannot simply empty a
@@ -161,7 +161,7 @@ rare. As alpha approaches 1, chains get long (or probe sequences get long)
 and supposedly constant-time operations start looking unmistakably linear.</p>
 <p>Real hash tables prevent this with <strong>automatic resizing</strong>. When the load
 factor crosses a threshold, allocate a new table roughly twice as big and
-<strong>rehash</strong> every entry into the new slots. CPython's <code>dict</code> resizes at about
+<strong>rehash</strong> every entry into the new slots. CPython&rsquo;s <code>dict</code> resizes at about
 2/3. Our companion <code>HashTable</code> resizes at 0.75. The slot index for a given
 key usually changes in the resized table, so there is no shortcut around
 rebuilding it.</p>
@@ -219,7 +219,7 @@ table and costs almost nothing — ordered iteration essentially for free.</p>
 <hr />
 <h2>Building one from scratch</h2>
 <p>The companion code for this article implements a hash table in about a hundred
-lines, using separate chaining, automatic resizing, and Python's built-in
+lines, using separate chaining, automatic resizing, and Python&rsquo;s built-in
 <code>hash()</code> for the hash function. Here is the core of it:</p>
 <pre><code class="language-python">class HashTable:
     INITIAL_SIZE = 8
@@ -347,7 +347,9 @@ Good-hash bucket distribution:
 <p>Same data, same resize thresholds, same table size. The good hash takes
 about a quarter of a millisecond. The bad hash takes thirty — two orders of
 magnitude slower — because every lookup linearly scans a bucket holding all
-2000 entries. Mean bucket size with the good hash is 0.49; the maximum is 4.
+2000 entries. Mean bucket size with the good hash is 0.49; the maximum here
+was 4 (string hashes are salted per process, so the exact occupied-slot and
+max-bucket figures vary slightly from run to run).
 That gap — between a uniform distribution and everything piled in one corner
 — is exactly what the PYTHONHASHSEED was introduced to protect against. A
 hash DoS attack does not <em>quite</em> turn your dict into the bad hash table, but
@@ -355,13 +357,13 @@ it gets close enough that your server falls over.</p>
 <hr />
 <h2>Real-world ML and AI connections</h2>
 <p>Dictionaries are the duct tape of machine learning code. Once you notice them
-you can't stop noticing them.</p>
+you can&rsquo;t stop noticing them.</p>
 <p><strong>Feature hashing, also known as the hashing trick.</strong> You have a categorical
 feature with millions of possible values — user IDs, URLs, n-grams — and you
 want to turn them into fixed-length vectors without building a vocabulary.
 Feature hashing hashes each feature string, takes the result modulo a fixed
 dimension <code>d</code>, and uses that as the index in a <code>d</code>-dimensional vector.
-Scikit-learn's <code>HashingVectorizer</code> does this for text: a streaming,
+Scikit-learn&rsquo;s <code>HashingVectorizer</code> does this for text: a streaming,
 memory-bounded featuriser that never has to see the full corpus. The price
 is collisions — two features landing on the same index are added together —
 but if <code>d</code> is large enough the resulting noise barely costs a decimal point
@@ -407,13 +409,13 @@ you use it because it is the medium of exchange.</p>
 <p>Hash tables are magnificent, but they are not magical, and a few things they
 cannot do.</p>
 <p><strong>Sorted iteration.</strong> A hash table gives you insertion order (Python 3.7+)
-or nothing. For "everything in key order" use a balanced BST, a skip list,
+or nothing. For &ldquo;everything in key order&rdquo; use a balanced BST, a skip list,
 or keep a sorted list on the side.</p>
-<p><strong>Range queries.</strong> "All keys between 100 and 200" is a fundamentally ordered
+<p><strong>Range queries.</strong> &ldquo;All keys between 100 and 200&rdquo; is a fundamentally ordered
 question, and the whole point of a hash table is that it throws order away.
 For range queries use a tree (balanced BST, B-tree) or a sorted array with
 binary search.</p>
-<p><strong>Prefix queries.</strong> "All keys starting with <code>foo_</code>" is the classic use case
+<p><strong>Prefix queries.</strong> &ldquo;All keys starting with <code>foo_</code>&rdquo; is the classic use case
 for a <strong>trie</strong>. A trie walks shared prefixes in O(k) where <code>k</code> is the prefix
 length; a hash table would have to scan everything.</p>
 <p><strong>Hashable keys only.</strong> You cannot use a list, dict, set or any mutable type
@@ -429,7 +431,7 @@ tables. Part 7 will be <strong>queues</strong>.</p>
 with <code>from collections import deque</code> and treated that deque as a queue,
 popping left and appending right. That worked because <code>collections.deque</code> is
 not a Python list — it is a doubly linked list of fixed-size blocks, and
-both ends are O(1). A list's <code>popleft</code> would have been O(n). Next article
+both ends are O(1). A list&rsquo;s <code>popleft</code> would have been O(n). Next article
 we will pull the deque apart, look at the circular buffer it is made of,
 and go from there to priority queues (binary heaps) and the single abstraction
 that ties BFS, experience replay, message passing and job scheduling into
@@ -446,4 +448,4 @@ test from 2000 to 20000 keys and watch the bad-hash time rise by a factor of
 one hundred while the good-hash time barely moves. That gap, in a single
 graph, is the entire point of this article.</p>
 <hr />
-<p><em>This is Part 6 of the Algorithms in Python series, Foundations track. The companion script <code>hash_table.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/@grahamjroy">Part 5</a> introduced graphs. Part 7 will look at queues — and show you why the <code>collections.deque</code> you used for BFS is so much faster than you'd think.</em></p>
+<p><em>This is Part 6 of the Algorithms in Python series, Foundations track. The companion script <code>hash_table.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/@grahamjroy">Part 5</a> introduced graphs. Part 7 will look at queues — and show you why the <code>collections.deque</code> you used for BFS is so much faster than you&rsquo;d think.</em></p>

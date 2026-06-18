@@ -162,7 +162,7 @@ dimensions to 2, keep enough variance to see the digit clusters.</p>
   Components fitted     : 10
   Explained variance ratio (top 5): 0.149 0.136 0.118 0.084 0.058
   Reconstruction error (10 components) MSE : 4.9143
-  Maximum |difference| in projections vs from-scratch : 2.18e-14
+  Maximum |difference| in projections vs from-scratch : 2.58e-14
 </code></pre>
 <pre><code>DEMO 3 --- How many components do we need?
     k    cumulative variance   reconstruction MSE
@@ -194,8 +194,9 @@ or before a neural net) this is the typical recipe: pick the
 elbow on the cumulative-variance curve, throw away the rest.</p>
 <p><strong>The from-scratch and sklearn implementations agree to
 floating-point precision.</strong> Maximum absolute difference in
-projected coordinates is <code>2.18e-14</code> — the bit-level rounding
-limit of 64-bit floats. PCA is one of the rare ML algorithms
+projected coordinates is <code>~10⁻¹⁴</code> — the bit-level rounding
+limit of 64-bit floats (the exact value varies with the BLAS
+library version). PCA is one of the rare ML algorithms
 where two correct implementations produce <em>byte-identical</em>
 results, modulo the sign ambiguity inherent in SVD.</p>
 <hr />

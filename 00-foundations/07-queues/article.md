@@ -301,7 +301,7 @@ Queues are everywhere in ML infrastructure once you start looking.
 **BFS and its cousins.** We already saw this in Part 5. `collections.deque`
 is what makes BFS run in O(V + E) instead of O(V^2). Replace the deque
 with a list and `popleft` becomes O(V) and the whole algorithm becomes
-O(V^2 + VE). The choice of queue implementation is the difference between
+O(V^2 + E). The choice of queue implementation is the difference between
 a traversal that finishes on a web-scale graph and one that does not.
 
 **Dijkstra and A\*.** The priority-queue generalisation of BFS. Part 5's
@@ -397,7 +397,7 @@ the same primitives with synchronisation on top.
 
 ## What comes next
 
-Six data structures down, two to go. Part 8 is **Trees**.
+Seven data structures down, five to go. Part 8 is **Trees**.
 
 We have already met two trees in disguise in this article. A binary heap
 is a complete binary tree stored as an array. A `deque`'s internal
@@ -409,9 +409,10 @@ search), B-trees (the data structure your database's index is actually
 built from), and the tree traversals that bring the BFS/DFS story full
 circle.
 
-And after Part 8 — knowledge graphs. The eighth and final foundation.
-Then we leave the data-structure layer and start building the algorithms
-that run on top.
+And after Part 8 — knowledge graphs, the ninth of our twelve
+foundations. Then probabilistic data structures, sparse matrices, and
+vector indexes complete the data-structure layer before we start
+building the algorithms that run on top.
 
 ---
 
@@ -427,7 +428,8 @@ Run it with:
 python queues.py
 ```
 
-It finishes in well under a second on a laptop. The headline line —
+It finishes in a few seconds on a laptop — the deliberately slow
+`list.pop(0)` benchmark dominates the runtime. The headline line —
 `deque.popleft()` running several thousand times faster than `list.pop(0)`
 on the same workload — is the sort of number you want pinned to the wall
 next to your desk.

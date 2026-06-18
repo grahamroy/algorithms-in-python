@@ -38,7 +38,7 @@ principles. We will define the **ELBO** — the lower bound
 that VI maximises — derive the **mean-field** algorithm in
 which `q` factorises across parameters, implement
 coordinate-ascent VI on a Bayesian linear regression
-problem with a non-conjugate Gaussian prior, compare against
+problem with Gaussian priors, compare against
 MCMC and against the exact analytical posterior, and finish
 with the **reparameterisation trick** and amortised inference
 that power modern deep VI methods like variational
@@ -326,11 +326,11 @@ The full script is on GitHub — grab it and run it:
 Run it with:
 
 ```bash
-pip install numpy scipy
+pip install numpy
 python variational_inference.py
 ```
 
-It needs `numpy` and `scipy`. The script fits Bayesian
+It needs only `numpy`. The script fits Bayesian
 linear regression three ways — exact closed-form posterior,
 mean-field VI by coordinate ascent on the ELBO, and MCMC
 with Metropolis-Hastings — and verifies all three agree on

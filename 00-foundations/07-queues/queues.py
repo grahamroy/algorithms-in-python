@@ -6,7 +6,7 @@ Three demos:
   2. Ring buffer with deque(maxlen=...) — a rolling window over a stream.
   3. Priority queue with heapq — min-heap by default, max-heap via negation.
 
-Pure stdlib. Runs in well under a second.
+Pure stdlib. Runs in a few seconds (the list.pop(0) benchmark dominates).
 """
 
 from collections import deque

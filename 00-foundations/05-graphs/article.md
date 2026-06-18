@@ -8,7 +8,7 @@ Open Wikipedia, type "Kevin Bacon" into the search bar, and pick any other artic
 you like. Now try to navigate from Kevin Bacon to that article using only the
 blue links inside each page. Almost every time, you can do it in fewer than six
 clicks. Kevin Bacon links to "Six Degrees of Kevin Bacon", which links to "Graph
-theory", which links to "Quantum mechanics". Four hops. You have just performed a
+theory", which links to "Quantum mechanics". Three hops. You have just performed a
 breadth-first search across a graph with roughly seven million nodes.
 
 Whenever a problem involves *things that are connected to other things*, you are

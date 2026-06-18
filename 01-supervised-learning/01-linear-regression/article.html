@@ -8,7 +8,7 @@ most important.</p>
 minimises the total error between its predictions and the actual data. The mathematics
 behind it are clean and elegant, and the Python implementation takes just a few lines of
 code. But there is more going on beneath the surface than most introductions reveal, and
-understanding what "best" actually means will change how you think about every algorithm
+understanding what &ldquo;best&rdquo; actually means will change how you think about every algorithm
 that comes after it.</p>
 <p>This article builds linear regression from the ground up. We will start with the
 intuition, derive the mathematics, implement it from scratch in Python, then do it
@@ -30,10 +30,10 @@ equation for that line is:</p>
 y-intercept (where the line crosses the vertical axis), and <strong>b₁</strong> is the slope (how
 much ŷ changes when x increases by one unit).</p>
 <p>The job of the algorithm is to find the values of b₀ and b₁ that make the line fit the
-data as closely as possible. "As closely as possible" needs a precise definition, and
+data as closely as possible. &ldquo;As closely as possible&rdquo; needs a precise definition, and
 that is where the cost function comes in.</p>
 <hr />
-<h2>The cost function: what "best" means</h2>
+<h2>The cost function: what &ldquo;best&rdquo; means</h2>
 <p>Given a set of data points, any line will make errors — it will predict values that are
 above some points and below others. The question is which line makes the <em>smallest</em>
 total error.</p>
@@ -50,7 +50,7 @@ steeper, shifted a little higher — produces a larger MSE.</p>
 <hr />
 <h2>The Normal Equation: solving it in one step</h2>
 <p>One of the elegant things about linear regression is that the optimal parameters can be
-found in a single calculation. There is no iteration, no "learning rate", no gradient
+found in a single calculation. There is no iteration, no &ldquo;learning rate&rdquo;, no gradient
 descent (we will meet those later in this series). The solution is a closed-form
 equation called the <strong>Normal Equation</strong>:</p>
 <blockquote>
@@ -83,7 +83,7 @@ X = 2 * np.random.rand(100, 1)            # 100 values between 0 and 2
 y = 3 + 4 * X + np.random.randn(100, 1)   # y = 3 + 4x + noise
 </code></pre>
 <p>The true intercept is 3, the true slope is 4, and we have added Gaussian noise to
-simulate real-world messiness. The algorithm's job is to look at these 100 noisy points
+simulate real-world messiness. The algorithm&rsquo;s job is to look at these 100 noisy points
 and figure out that the underlying relationship is approximately y = 3 + 4x.</p>
 <hr />
 <h2>Step 2: Split into training and test sets</h2>
@@ -149,8 +149,8 @@ r2 = r2_score(y_test, y_pred)
 <p><strong>Mean Squared Error (MSE)</strong> tells you the average squared prediction error. Lower is
 better, but the number is hard to interpret on its own because it is in squared units.</p>
 <p><strong>Root Mean Squared Error (RMSE)</strong> is the square root of MSE — it is in the same units
-as y, making it easier to understand. An RMSE of 1.05 means the model's predictions
-are off by about 1.05 units on average.</p>
+as y, making it easier to understand. An RMSE of 0.81 means the model&rsquo;s predictions
+are off by about 0.81 units on average.</p>
 <p><strong>R² Score</strong> is the proportion of variance in y that the model explains. An R² of 0.89
 means the model captures 89% of the variation in the data. The remaining 11% is noise
 that a straight line cannot capture. A perfect model scores 1.0; a model that just
@@ -205,7 +205,7 @@ systematically miss.</p>
 <p><strong>Independence.</strong> Each data point is independent of the others. Time series data, where
 each measurement depends on the previous one, often violates this.</p>
 <p><strong>Homoscedasticity.</strong> The spread of residuals is roughly constant across all values of
-x. If errors fan out (larger variance for larger x), the model's confidence intervals
+x. If errors fan out (larger variance for larger x), the model&rsquo;s confidence intervals
 become unreliable.</p>
 <p><strong>Normality of residuals.</strong> The errors follow a roughly normal distribution. This
 matters most for statistical inference (confidence intervals, p-values) rather than for

@@ -246,13 +246,14 @@ forecasting.</p>
 <pre><code class="language-bash">pip install numpy pymc
 python probabilistic_programming.py
 </code></pre>
-<p>It needs <code>numpy</code> and <code>pymc</code>. The script fits Bayesian
+<p>It needs <code>numpy</code>, <code>pymc</code>, and <code>arviz</code> (arviz installs as a
+pymc dependency). The script fits Bayesian
 linear regression on the same dataset from Part 3 — but
 this time using PyMC instead of hand-coded MCMC or VI.
 The model definition is 11 lines; PyMC compiles it,
 selects NUTS as the sampler, runs 4 parallel chains, and
 returns a posterior with R-hat 1.0 and effective sample
-size ~3000 across all parameters, matching the analytical
+size ~5000 across all parameters, matching the analytical
 posterior to two decimal places. The headline insight worth
 pinning to the wall: <strong>probabilistic programming abstracts
 the inference machinery; you specify the model

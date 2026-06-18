@@ -205,7 +205,7 @@ DEMO 2 --- Same data, scikit-learn PCA
   Components fitted     : 10
   Explained variance ratio (top 5): 0.149 0.136 0.118 0.084 0.058
   Reconstruction error (10 components) MSE : 4.9143
-  Maximum |difference| in projections vs from-scratch : 2.18e-14
+  Maximum |difference| in projections vs from-scratch : 2.58e-14
 ```
 
 ```
@@ -243,8 +243,9 @@ elbow on the cumulative-variance curve, throw away the rest.
 
 **The from-scratch and sklearn implementations agree to
 floating-point precision.** Maximum absolute difference in
-projected coordinates is `2.18e-14` — the bit-level rounding
-limit of 64-bit floats. PCA is one of the rare ML algorithms
+projected coordinates is `~10⁻¹⁴` — the bit-level rounding
+limit of 64-bit floats (the exact value varies with the BLAS
+library version). PCA is one of the rare ML algorithms
 where two correct implementations produce *byte-identical*
 results, modulo the sign ambiguity inherent in SVD.
 

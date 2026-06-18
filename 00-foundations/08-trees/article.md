@@ -13,7 +13,7 @@ profiles.
 
 But you have already used dozens of them. Your filesystem is a tree. The
 DOM the browser parses is a tree. The expression `x * (y + z)` is parsed
-into a tree before it is evaluated. Every `pandas` decision tree classifier,
+into a tree before it is evaluated. Every `scikit-learn` decision tree classifier,
 every B-tree index inside Postgres, every nearest-neighbour query inside
 FAISS or scikit-learn — trees, all the way down.
 
@@ -180,7 +180,7 @@ label off the leaf you land on.
         /     \            /        \
       no     yes         yes        no
       |       |           |          |
-    safe   risky        risky       safe
+   risky    safe        risky       safe
 ```
 
 Training is what the algorithm actually does for you. At each internal
@@ -514,9 +514,9 @@ the first place.
 
 ## What comes next
 
-Seven foundations down, one to go. Part 9 is **Knowledge Graphs** — the
-final foundation, and the one that ties the entire data-structure track
-back to where graphs left off in Part 5. We will look at triples,
+Eight foundations down, four to go. Part 9 is **Knowledge Graphs** — the
+one that ties the entire data-structure track back to where graphs left
+off in Part 5. We will look at triples,
 ontologies, entity embeddings, and how knowledge graphs power the
 retrieval-augmented generation systems that sit underneath modern LLM
 applications.

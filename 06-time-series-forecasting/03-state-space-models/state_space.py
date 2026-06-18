@@ -4,7 +4,7 @@ state_space.py --- companion code for "State-Space Models"
 
 Three demos:
   1. Unobserved Components Model with local linear trend +
-     trigonometric seasonality on the airline-passengers data.
+     dummy-variable seasonality on the airline-passengers data.
   2. Component decomposition: print final level, trend, and
      seasonal peak/trough.
   3. Side-by-side accuracy comparison with ARIMA, SARIMA, and

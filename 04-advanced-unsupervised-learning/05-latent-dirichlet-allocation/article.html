@@ -116,10 +116,10 @@ under-estimates posterior variance.</p>
 <h2>A worked example</h2>
 <p>The companion script trains LDA on a 12-document corpus
 constructed from three deliberately-distinct topics: cooking,
-machine learning, and sports. The vocabulary is small (~50
+machine learning, and sports. The vocabulary is small (~30
 unique words) so the topic recovery is clearly verifiable.</p>
 <pre><code>DEMO 1 --- LDA on a 12-document toy corpus
-  Vocabulary size : 49
+  Vocabulary size : 33
   Documents       : 12
   Topics          : 3
   Method          : variational EM (sklearn)
@@ -131,7 +131,7 @@ unique words) so the topic recovery is clearly verifiable.</p>
   Topic 1: recipe, flour, oven, butter, bake, egg, dough, mix, sugar, cook
   Topic 2: win, team, score, player, match, coach, game, goal, league, ball
 </code></pre>
-<pre><code>DEMO 3 --- Per-document topic mixture (rounded, reordered to match labels)
+<pre><code>DEMO 3 --- Per-document topic mixture (rounded; columns reordered here to match the label names)
   doc  cooking  ml      sports  inferred-label
   ---  -------  ------  ------  --------------
    0   0.95     0.02    0.02    cooking
@@ -169,8 +169,8 @@ quality and topic count.</p>
 <h2>Big-O and complexity</h2>
 <p>![[BIG-O TABLE IMAGE]]</p>
 <p>LDA&rsquo;s cost is dominated by inference:</p>
-<p><strong>Variational EM training</strong>: roughly <code>O(I · D · N̄ · K)</code> per
-iteration, where <code>I</code> is the number of EM iterations, <code>D</code> is
+<p><strong>Variational EM training</strong>: roughly <code>O(I · D · N̄ · K)</code> in
+total, where <code>I</code> is the number of EM iterations, <code>D</code> is
 the document count, <code>N̄</code> is the average document length, and
 <code>K</code> is the number of topics. Modest cost — scales to
 millions of documents with online learning variants (Hoffman
@@ -210,8 +210,8 @@ competitive against neural CF on cold-start problems.</p>
 <p><strong>Foundations of probabilistic programming.</strong> LDA is the
 canonical &ldquo;complex probabilistic model&rdquo; used in tutorials
 for PyMC, Pyro, Stan, and other PPL systems. Implementing
-LDA cleanly is a rite of passage in the probabilistic-
-modelling community.</p>
+LDA cleanly is a rite of passage in the
+probabilistic-modelling community.</p>
 <p>The pattern: LDA is the <em>interpretable baseline</em> for
 topic modelling. Modern neural methods often beat it on
 some metrics — but rarely on interpretability, and almost

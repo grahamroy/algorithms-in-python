@@ -326,10 +326,11 @@ sometimes *truncate* the trained ensemble: keep only the first
 
 Histogram-based variants (LightGBM, XGBoost `hist`, sklearn's
 `HistGradientBoostingClassifier`) replace per-feature sort with
-quantile binning. Training cost drops from `O(M · n · d ·
-depth)` to roughly `O(M · #bins · d · depth)` — sublinear in `n`
-beyond the bin count. This is what makes LightGBM and XGBoost
-practical on tens of millions of rows.
+quantile binning. The expensive per-split sorting is replaced
+by cheap fixed-size bin scans — split finding costs
+`O(#bins · d)` per node instead of `O(n · d)`, on top of one
+linear histogram pass per level. This is what makes LightGBM
+and XGBoost practical on tens of millions of rows.
 
 ---
 
@@ -342,8 +343,9 @@ one of three implementations:
 that combined second-order gradients (Newton step), L1/L2
 regularisation on leaf weights, sparse-aware splits (a feature
 with many zeros gets a "default direction" branch), and a
-distributed/GPU-aware training pipeline. Won the Higgs Boson
-Kaggle competition and immediately became the new tabular
+distributed/GPU-aware training pipeline. Rose to prominence in
+the 2014 Higgs Boson Kaggle challenge (taking the dedicated
+HEP-meets-ML award) and quickly became the new tabular
 state-of-the-art. Still the most popular GBM library on
 Kaggle.
 
@@ -354,9 +356,11 @@ the same parameter budget captures more signal. Adds native
 handling of categorical features and is typically 2–10× faster
 than XGBoost on large datasets at comparable accuracy.
 
-**CatBoost** (Yandex, 2017). The big idea is **ordered boosting**
-— a target-encoding strategy that avoids the target-leakage
-that plagues naive mean-encoding of categoricals. Handles
+**CatBoost** (Yandex, 2017). Two big ideas: **ordered target
+statistics** — a leakage-free target encoding for categoricals
+that avoids the target-leakage plaguing naive mean-encoding —
+and **ordered boosting**, a scheme that removes prediction
+shift from the gradient estimates. Handles
 arbitrary categorical features without one-hot encoding,
 which matters when your `d` includes high-cardinality categorical
 columns (zip codes, product IDs, user IDs). Typically the best

@@ -154,7 +154,8 @@ Putting the two ingredients together:
 RandomForest.fit(X, y, n_trees, k_features, max_depth):
     forest = []
     for t in 1..n_trees:
-        X_t, y_t, in_bag = bootstrap(X, y)
+        X_t, y_t, in_bag_indices = bootstrap(X, y)
+        # bootstrap returns the sampled rows AND their indices
         tree = DecisionTree(max_depth, k_features=k_features)
         tree.fit(X_t, y_t)
         forest.append((tree, in_bag))
@@ -200,8 +201,10 @@ oob_predict(X_train):
 oob_score = accuracy(y_train, oob_predict(X_train))
 ```
 
-The OOB accuracy is an unbiased estimate of the random forest's
-generalisation accuracy. For most problems it tracks
+The OOB accuracy is a nearly-free, slightly conservative estimate
+of the random forest's generalisation accuracy (each row is
+predicted by only the ~37% of trees that did not see it). For
+most problems it tracks
 cross-validation accuracy to within a fraction of a percent,
 for free. This is one of the underappreciated wins of bagging
 ensembles: you do not need a separate validation split to
@@ -239,7 +242,7 @@ DEMO 3 --- Random forest vs single decision tree
   Single tree (depth 6) test acc : 0.940
   Random forest         test acc : 0.970
   Test-set variance over 10 training-set perturbations:
-      single tree   : ±0.017
+      single tree   : ±0.020
       random forest : ±0.012
 ```
 
@@ -250,7 +253,7 @@ trained on a smaller bootstrap sample of the data with weaker
 splits (only one of two features considered per split). That is
 the magic of the ensemble. Second — and arguably more important
 — the **variance** of the test accuracy under bootstrap
-perturbations of the training set dropped from `±0.017` to
+perturbations of the training set dropped from `±0.020` to
 `±0.012`. The random forest is not just more accurate on this
 run; it is more *reliably* accurate. That is the property
 production systems care about, and the gap widens on harder
@@ -442,7 +445,7 @@ random forest from scratch by composing the decision tree from
 Part 5 with bootstrap sampling and per-split feature
 subsampling, fits it to the same moons dataset Part 5 used,
 compares against scikit-learn's `RandomForestClassifier` (which
-agrees on 99 out of 100 test predictions and matches the OOB
+agrees on 100 out of 100 test predictions, with a comparable OOB
 accuracy), and finishes with a head-to-head against a single
 decision tree showing both the accuracy lift and — more
 importantly — the variance reduction across re-seeds. The

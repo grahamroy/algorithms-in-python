@@ -232,6 +232,8 @@ DEMO --- Causal effect estimation on confounded synthetic data
   Treatment   : binary, propensity depends on Z_1, Z_2
   Outcome     : Y = 1.0 + 2.0 * T + 1.5 * Z_1 + 1.2 * Z_2 + noise
 
+  Treated fraction : 0.36
+
   Method                                   Estimated ATE    Bias
   ------------------------------------     -------------   -----
   Naive (simple difference in means)                4.08   +2.08

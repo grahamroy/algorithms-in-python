@@ -24,9 +24,9 @@ imbalanced. Supervised classification is the wrong shape;
 unsupervised anomaly detection is the right one.
 
 This article is a *survey* rather than a deep dive on a
-single algorithm. We will walk through five distinct
+single algorithm. We will walk through six distinct
 families — statistical, density-based, distance-based,
-isolation-based, and reconstruction-based — show what each
+isolation-based, reconstruction-based, and one-class — show what each
 one does, when it is the right choice, and compare them
 side-by-side on a 2-D toy problem with planted outliers.
 The deepest article-length treatment in this series is
@@ -36,7 +36,7 @@ coverage with pointers for further reading.
 
 ---
 
-## The five families
+## The six families
 
 Anomaly detection algorithms differ by what they consider
 "normal" — and by how they score deviation from it.
@@ -154,12 +154,12 @@ outside its decision boundary is anomalous.
 
 The companion script generates 500 inlier points from a 2-D
 Gaussian mixture plus 25 planted outliers uniformly
-distributed in a larger box, and runs four anomaly detectors
+distributed in a larger box, and runs six anomaly detectors
 on the data — each scoring every point, then comparing the
 top-25 flagged anomalies against the ground-truth outliers.
 
 ```
-DEMO --- Five anomaly detectors on synthetic data
+DEMO --- Six anomaly detectors on synthetic data
   Dataset       : 500 inliers (mixture of 2 Gaussians) + 25 outliers
   Top-25 flagged points compared against true outliers
 
@@ -200,8 +200,8 @@ outliers land.
 
 **There is no single winner.** On this 2-D Gaussian-mixture
 dataset, OCSVM happens to top the precision leaderboard
-but the ranking is fragile across re-seeds. On a high-
-dimensional dataset, k-NN becomes unreliable (curse of
+but the ranking is fragile across re-seeds. On a
+high-dimensional dataset, k-NN becomes unreliable (curse of
 dimensionality) and Isolation Forest takes over. On image /
 audio data, autoencoder reconstruction MSE wins. Match the
 algorithm to the data structure.
@@ -212,7 +212,7 @@ algorithm to the data structure.
 
 ![[BIG-O TABLE IMAGE]]
 
-The five families have very different cost profiles:
+The six families have very different cost profiles:
 
 - **Statistical methods** are `O(n · d)` to fit, `O(d)` per
   query. Essentially free.

@@ -105,9 +105,10 @@ sudden trend changes — Prophet returns <em>something</em> sensible
 where ARIMA might silently produce garbage.</p>
 <p>The downside, predictable from these design choices:
 <strong>Prophet&rsquo;s defaults are decent, but the model is hard to
-tune for last-mile accuracy</strong>. The 2024 Hyndman critique
-showed Prophet underperforms simpler methods on many
-benchmarks. The right framing: Prophet is the
+tune for last-mile accuracy</strong>. Rob Hyndman and colleagues have
+long pointed out that Prophet underperforms simpler statistical
+methods on many standard benchmarks. The right framing: Prophet
+is the
 no-effort baseline, not the production accuracy champion.</p>
 <hr />
 <h2>A worked example</h2>
@@ -163,9 +164,11 @@ gives proper posterior uncertainty.</p>
 <p><strong>Forecasting</strong> is <code>O(h · features)</code> — evaluate the fitted
 function at each future time step.</p>
 <p><strong>Memory</strong> is <code>O(n + features²)</code> during fitting.</p>
-<p>The Stan backend can be brittle on Windows; the alternative
-<strong>cmdstanpy</strong> backend and the <strong>NeuralProphet</strong> rewrite (which
-replaces Stan with PyTorch) address some of those issues.</p>
+<p>Prophet&rsquo;s older PyStan backend was brittle on Windows;
+<strong>cmdstanpy</strong> has been the default (and only) Stan backend
+since Prophet 1.1, and the <strong>NeuralProphet</strong> rewrite (which
+replaces Stan with PyTorch) addresses the remaining pain
+points.</p>
 <hr />
 <h2>Real-world ML and AI connections</h2>
 <p><strong>Internal forecasting at Meta.</strong> Prophet was open-sourced

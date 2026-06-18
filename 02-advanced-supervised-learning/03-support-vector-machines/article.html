@@ -190,7 +190,7 @@ the moons dataset, because no straight line in 2D can separate
 two interleaving half-moons. This is a <code>d = 2</code> problem with a
 curved boundary — exactly where the kernel trick earns its keep.</p>
 <p><strong>RBF beats both forest and boosting on this dataset.</strong> With
-<code>C = 1.0</code> and default <code>γ</code>, the RBF SVM reaches <code>0.98</code> test
+<code>C = 1.0</code> and <code>γ = "auto"</code>, the RBF SVM reaches <code>0.98</code> test
 accuracy — <em>above</em> the random forest from Part 1 (<code>0.97</code>) and
 the gradient-boosted ensemble from Part 2 at their sweet spots.
 The &ldquo;non-linear feature space&rdquo; was infinite-dimensional in
@@ -215,7 +215,7 @@ subgradient methods, you can train a linear SVM on <code>n = 10⁶</code>,
 <code>d = 10⁵</code> (sparse) in seconds. Linear SVM on bag-of-words text
 classification is still a sensible default in 2026.</p>
 <p><strong>Kernel SVM training scales badly.</strong> The dual quadratic
-programme is <code>O(n² · d)</code> in memory (the Gram matrix is <code>n × n</code>)
+programme is <code>O(n²)</code> in memory (the Gram matrix is <code>n × n</code>)
 and roughly <code>O(n² · d)</code> to <code>O(n³ · d)</code> in compute, depending on
 the solver. For <code>n = 10⁴</code> it is fine. For <code>n = 10⁵</code> it is
 painful. For <code>n = 10⁶</code> it is impractical without
@@ -341,8 +341,8 @@ L2 regularisation, fits the moons dataset, compares against
 scikit-learn&rsquo;s <code>LinearSVC</code> (predictions agree on every test
 example), then trains a kernelised <code>SVC</code> with the RBF kernel
 and sweeps <code>C</code> to show the bias-variance trade-off — the
-linear model tops out at <code>0.87</code> because moons is not linearly
-separable, while the RBF kernel restores accuracy to <code>0.97</code>
+linear model tops out at <code>0.90</code> because moons is not linearly
+separable, while the RBF kernel lifts accuracy to <code>0.98</code>
 without ever explicitly computing the non-linear feature space.
 The headline insight worth pinning to the wall: <strong>find the
 widest gap between the classes, then replace inner products

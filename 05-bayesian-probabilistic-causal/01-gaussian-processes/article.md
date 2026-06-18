@@ -360,9 +360,11 @@ python gaussian_process.py
 It needs `numpy` and `scikit-learn`. The script implements GP
 regression from scratch with an RBF kernel, fits it to a
 1-D noisy regression problem, compares with scikit-learn's
-`GaussianProcessRegressor` (predictions agree to
-floating-point precision), and reports 95% confidence-
-interval coverage of the true function (≈0.94, matching the
+`GaussianProcessRegressor` (predictions agree closely — the
+small residual difference comes from sklearn re-optimising
+the length-scale), and reports 95%
+confidence-interval coverage of the true function (≈0.97,
+slightly conservative of the
 nominal 0.95). The headline insight worth pinning to the
 wall: **a Gaussian Process puts a prior over functions,
 parameterised by a kernel; conditioning on data gives a

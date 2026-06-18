@@ -238,8 +238,8 @@ DEMO 2 --- Rule generation (min_confidence=0.6, sorted by lift)
 
 ```
 DEMO 3 --- Same data, mlxtend Apriori + association_rules
-  Frequent itemsets discovered: 41   (matches from-scratch)
-  Rules with confidence >= 0.6:  57   (matches from-scratch)
+  Frequent itemsets discovered: 41   (from-scratch: 41)
+  Rules with confidence >= 0.6:  57   (from-scratch: 57)
   Top rule by lift: {beer, bread} -> {butter, soda}  (lift = 3.03)
 ```
 

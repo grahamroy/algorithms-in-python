@@ -145,9 +145,10 @@ where ARIMA might silently produce garbage.
 
 The downside, predictable from these design choices:
 **Prophet's defaults are decent, but the model is hard to
-tune for last-mile accuracy**. The 2024 Hyndman critique
-showed Prophet underperforms simpler methods on many
-benchmarks. The right framing: Prophet is the
+tune for last-mile accuracy**. Rob Hyndman and colleagues have
+long pointed out that Prophet underperforms simpler statistical
+methods on many standard benchmarks. The right framing: Prophet
+is the
 no-effort baseline, not the production accuracy champion.
 
 ---
@@ -225,9 +226,11 @@ function at each future time step.
 
 **Memory** is `O(n + features²)` during fitting.
 
-The Stan backend can be brittle on Windows; the alternative
-**cmdstanpy** backend and the **NeuralProphet** rewrite (which
-replaces Stan with PyTorch) address some of those issues.
+Prophet's older PyStan backend was brittle on Windows;
+**cmdstanpy** has been the default (and only) Stan backend
+since Prophet 1.1, and the **NeuralProphet** rewrite (which
+replaces Stan with PyTorch) addresses the remaining pain
+points.
 
 ---
 

@@ -414,7 +414,7 @@ corpus, classifies a held-out set, compares against scikit-learn's
 `MultinomialNB` (which agrees on every prediction), and prints
 the most informative tokens per class — the words that move the
 log-posterior the most, like *free*, *text*, *click* on the
-spam side and *home*, *thanks*, *dinner* on the ham side. The
+spam side and *the*, *at*, *home* on the ham side. The
 headline insight worth pinning to the wall: **Naive Bayes is
 just counting plus Bayes' rule, runs in a single pass through
 the data, and sets the baseline that every fancier text

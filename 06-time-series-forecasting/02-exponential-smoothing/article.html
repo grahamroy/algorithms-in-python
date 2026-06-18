@@ -106,10 +106,12 @@ in a <strong>state-space form</strong> with three slots:</p>
 simple exponential smoothing; <code>ETS(A, A, A)</code> is Holt-Winters
 additive; <code>ETS(M, A, M)</code> is Holt-Winters multiplicative (the
 classical airline-passengers model).</p>
-<p>The unified framework lets statsmodels&rsquo; <code>ETSModel</code> and R&rsquo;s
-<code>forecast::ets()</code> automatically pick the best <code>(E, T, S)</code>
-combination by AIC — analogous to <code>auto_arima</code> for the ARIMA
-family.</p>
+<p>The unified framework is what lets R&rsquo;s <code>forecast::ets()</code>
+automatically pick the best <code>(E, T, S)</code> combination by AIC —
+analogous to <code>auto_arima</code> for the ARIMA family. statsmodels&rsquo;
+<code>ETSModel</code> has no built-in auto-selection, so the companion
+script hand-rolls the AIC search over a handful of candidate
+combinations.</p>
 <hr />
 <h2>A worked example</h2>
 <p>The companion script fits several exponential smoothing
@@ -127,7 +129,7 @@ against the SARIMA model from Part 1.</p>
   Test MAPE         : 2.21%
   Test RMSE         : 15.81
 </code></pre>
-<pre><code>DEMO 3 --- ETS auto-selection across all (E, T, S) combinations
+<pre><code>DEMO 3 --- ETS auto-selection across candidate (E, T, S) combinations
   Best model         : ETS(M, A, M)
   AIC                : 967.98
   Test MAPE          : 4.28%

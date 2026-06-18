@@ -328,7 +328,8 @@ def demo_variance(X_train, X_test, y_train, y_test):
         idx = rng.integers(0, n_train, size=n_train)
         Xb, yb = X_train[idx], y_train[idx]
 
-        tr = SkTree(criterion="gini", max_depth=6)
+        tr = SkTree(criterion="gini", max_depth=6,
+                    random_state=RNG_SEED)
         tr.fit(Xb, yb)
         tree_scores.append((tr.predict(X_test) == y_test).mean())
 

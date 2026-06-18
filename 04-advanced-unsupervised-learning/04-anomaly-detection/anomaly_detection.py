@@ -113,7 +113,7 @@ def evaluate(name, scores, y_true, top_k=25):
 
 
 def main() -> None:
-    banner("DEMO --- Five anomaly detectors on synthetic data")
+    banner("DEMO --- Six anomaly detectors on synthetic data")
 
     X, y_true = make_dataset()
     n_out = int(y_true.sum())

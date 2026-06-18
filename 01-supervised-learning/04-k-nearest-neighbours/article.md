@@ -168,8 +168,8 @@ usually a free improvement.
 
 ## A worked example
 
-The companion script generates a 2D synthetic dataset (300
-points, 3 well-separated Gaussian classes) and walks the
+The companion script generates a 2D synthetic dataset (500
+points, 3 overlapping Gaussian classes) and walks the
 classifier through it. Here is the from-scratch core:
 
 ```python

@@ -460,7 +460,7 @@ python gmm.py
 It needs `numpy` and `scikit-learn`. The script implements
 GMM-EM from scratch with full covariance and K-Means++
 initialisation, fits it to 3 anisotropic Gaussian clusters
-that K-Means cannot recover (ARI 0.60 for K-Means vs 0.99
+that K-Means cannot recover (ARI 0.33 for K-Means vs 0.84
 for GMM), compares against scikit-learn's `GaussianMixture`
 (identical log-likelihood and ARI 1.000 agreement), and
 runs a BIC sweep over `K` that correctly identifies `K = 3`

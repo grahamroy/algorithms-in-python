@@ -3,8 +3,9 @@ spectral_clustering.py --- companion code for "Spectral Clustering"
 (Unsupervised Learning, Part 7).
 
 Three demos:
-  1. From-scratch spectral clustering (RBF affinity, symmetric
-     normalised Laplacian, K-Means on row-normalised eigenvectors)
+  1. From-scratch spectral clustering (k-NN affinity with local
+     Gaussian scale, symmetric normalised Laplacian, K-Means on
+     row-normalised eigenvectors)
      on three datasets that span K-Means failure modes: 3 blobs,
      2 moons, 2 circles.
   2. Comparison with scikit-learn's SpectralClustering.

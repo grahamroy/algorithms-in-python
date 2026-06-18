@@ -24,8 +24,8 @@ network is forced to discover, in the latent code, whatever
 compressed representation lets the decoder rebuild the input
 most accurately.
 
-When the encoder and decoder are linear maps with a squared-
-error loss, the optimal solution is *exactly* PCA. When they
+When the encoder and decoder are linear maps with a
+squared-error loss, the optimal solution is *exactly* PCA. When they
 are non-linear (typical: a few dense layers with ReLU
 activations), the autoencoder learns a non-linear compression
 that can capture curved manifolds PCA cannot. And — unlike
@@ -238,8 +238,8 @@ to minutes.
 Autoencoders and their descendants are everywhere in modern
 ML:
 
-**Self-supervised pretraining.** Every modern transformer-
-based language model (BERT, GPT, T5) pretrains with some
+**Self-supervised pretraining.** Every modern
+transformer-based language model (BERT, GPT, T5) pretrains with some
 form of masked-input reconstruction — the masked autoencoder
 recipe. The pretrained encoder is then fine-tuned for
 downstream tasks. This is the single biggest application
@@ -339,9 +339,11 @@ small autoencoder from scratch in numpy with manual
 backpropagation, ReLU activations, and Adam optimisation;
 trains it on the digits dataset; compares reconstruction
 error against PCA at the same bottleneck size; and uses the
-learned latent codes for KNN classification to show that the
-non-linear compression is more discriminative than PCA's
-linear one. The headline insight worth pinning to the wall:
+learned latent codes for KNN classification — where PCA's
+linear latent narrowly beats the autoencoder's (0.919 vs
+0.903), a reminder that lower reconstruction error does not
+guarantee a more discriminative latent
+space. The headline insight worth pinning to the wall:
 **an autoencoder is two networks trained to compress and
 reconstruct the input; the bottleneck forces the encoder to
 discover useful features; non-linear autoencoders beat PCA

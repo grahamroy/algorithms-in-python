@@ -245,6 +245,7 @@ The full script is on GitHub — grab it here and run it yourself:
 Run it with:
 
 ```bash
+pip install numpy
 python arrays.py
 ```
 

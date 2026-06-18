@@ -1,12 +1,12 @@
-<p>At the end of Part 7 I claimed that a binary heap is "a tree hiding inside
-an array." That was a hint about today. The heap is actually the simplest
+<p>At the end of Part 7 I claimed that a binary heap is &ldquo;a tree hiding inside
+an array.&rdquo; That was a hint about today. The heap is actually the simplest
 tree most engineers ever use — flat in memory, balanced for free, with a
 single invariant. Honest trees, the ones that branch arbitrarily and grow
 unevenly, look very different in code and have very different performance
 profiles.</p>
 <p>But you have already used dozens of them. Your filesystem is a tree. The
 DOM the browser parses is a tree. The expression <code>x * (y + z)</code> is parsed
-into a tree before it is evaluated. Every <code>pandas</code> decision tree classifier,
+into a tree before it is evaluated. Every <code>scikit-learn</code> decision tree classifier,
 every B-tree index inside Postgres, every nearest-neighbour query inside
 FAISS or scikit-learn — trees, all the way down.</p>
 <p>In Part 5 we walked <strong>graphs</strong> and met BFS and DFS. A tree is just a graph
@@ -112,16 +112,16 @@ def search(root, value):
         return search(root.left, value)
     return search(root.right, value)
 </code></pre>
-<p>The "if balanced" caveat is doing real work. Insert the integers <code>1, 2, 3,
+<p>The &ldquo;if balanced&rdquo; caveat is doing real work. Insert the integers <code>1, 2, 3,
 4, 5</code> into an empty BST in that order and you get a tree that is just a
 linked list — every node has one child, lookup is O(n), and you have done
 worse than a sorted array. This is why production code never uses a naive
 BST. It uses a <strong>self-balancing</strong> variant — red-black trees in
-<code>std::map</code>, <code>TreeMap</code>, and Linux's process scheduler; AVL trees in some
+<code>std::map</code>, <code>TreeMap</code>, and Linux&rsquo;s process scheduler; AVL trees in some
 in-memory indexes; B-trees on disk. The invariant is the same; the
 extra machinery is rotations that re-shape the tree on every insert to
 keep its height at O(log n).</p>
-<p>Python's standard library does not ship a self-balancing BST — for
+<p>Python&rsquo;s standard library does not ship a self-balancing BST — for
 in-memory ordered keys you reach for <code>sortedcontainers.SortedDict</code>, which
 is implemented on top of sorted lists, or you use a heap if you only need
 the minimum. The interesting BSTs are the ones we never write ourselves.</p>
@@ -140,12 +140,12 @@ label off the leaf you land on.</p>
         /     \            /        \
       no     yes         yes        no
       |       |           |          |
-    safe   risky        risky       safe
+   risky    safe        risky       safe
 </code></pre>
 <p>Training is what the algorithm actually does for you. At each internal
 node it considers every feature, every possible split threshold, and
 picks the split that most cleanly separates the labels in the training
-data. "Most cleanly" is measured by a function — typically <strong>Gini
+data. &ldquo;Most cleanly&rdquo; is measured by a function — typically <strong>Gini
 impurity</strong> or <strong>entropy</strong>. Both reach the same intuition: a split is good
 if the resulting groups are more homogeneous than the parent.</p>
 <pre><code>Gini(node) = 1 - sum_k (p_k)^2
@@ -199,18 +199,18 @@ whole is far more stable than any one tree.</p>
          /  \     /  \           /  \
         ...  ... ...  ...       ...  ...
 </code></pre>
-<p>The "random" in random forest does two things. <strong>Bagging</strong> (bootstrap
+<p>The &ldquo;random&rdquo; in random forest does two things. <strong>Bagging</strong> (bootstrap
 aggregation) gives each tree a different slice of the rows, so they make
 different mistakes. <strong>Feature subsampling</strong> at each split — typically
 <code>sqrt(num_features)</code> of them — stops every tree from becoming a copy of
-the same dominant feature's split. The result is a diverse ensemble whose
+the same dominant feature&rsquo;s split. The result is a diverse ensemble whose
 errors decorrelate.</p>
 <p>Random forests, gradient-boosted trees (XGBoost, LightGBM, CatBoost), and
 their relatives still win on most well-behaved tabular benchmarks. Deep
 learning beat them at images, audio, and language; on a CSV with a
 hundred thousand rows and forty columns, gradient boosting is almost
 always the right first move. The whole field of tabular ML is
-"how do we ensemble decision trees better." It is hard to overstate how
+&ldquo;how do we ensemble decision trees better.&rdquo; It is hard to overstate how
 durable this idea is.</p>
 <hr />
 <h2>KD-trees and ball trees — partitioning space for nearest-neighbour search</h2>
@@ -218,7 +218,7 @@ durable this idea is.</p>
 and you need to find the nearest neighbour of a new query point. Brute
 force — distance to every point — is O(n) per query. A million queries on
 a million points is O(n^2) and you wait days.</p>
-<p>A <strong>KD-tree</strong> ("k-dimensional tree") cuts this to O(log n) per query in
+<p>A <strong>KD-tree</strong> (&ldquo;k-dimensional tree&rdquo;) cuts this to O(log n) per query in
 low dimensions by recursively partitioning space. At the root, pick a
 dimension (say x) and split the points into two halves at the median. At
 the next level, switch to the next dimension (y) and split each half at
@@ -239,7 +239,7 @@ value.</p>
           split on x at the median
 </code></pre>
 <p>Querying is the half that matters. Walk down the tree as if doing a BST
-search using the query's coordinates, find the leaf bucket, and compute
+search using the query&rsquo;s coordinates, find the leaf bucket, and compute
 the distance to every point in it — that gives you a <em>candidate</em> nearest
 neighbour. Then back up: if the distance to the splitting plane on the
 way down is smaller than your current best distance, the true nearest
@@ -247,7 +247,7 @@ neighbour might be on the other side, so you have to visit it too.
 Otherwise you can prune the entire subtree.</p>
 <p>In low dimensions (k ≤ 20 or so) the pruning is dramatic and queries
 finish in O(log n). As dimensionality grows the pruning stops working —
-the "curse of dimensionality" means hyperspheres rarely fit on one side
+the &ldquo;curse of dimensionality&rdquo; means hyperspheres rarely fit on one side
 of a hyperplane, so you keep having to visit the other branch. By
 k = 100 a KD-tree is barely better than brute force, which is why FAISS,
 Annoy, and ScaNN abandon exact search for approximate methods (HNSW
@@ -255,7 +255,7 @@ graphs, IVF, product quantisation) once dimensionality grows. The trees
 are still in there — HNSW is a layered graph that <em>behaves</em> like a
 multi-resolution tree at query time.</p>
 <p>A <strong>ball tree</strong> is the same idea with hyperspheres instead of axis-aligned
-boxes. It tolerates higher dimensions a bit better. scikit-learn's
+boxes. It tolerates higher dimensions a bit better. scikit-learn&rsquo;s
 <code>NearestNeighbors</code> picks between brute force, KD-tree, and ball tree
 based on the data shape; the choice is largely about how many dimensions
 you have.</p>
@@ -283,9 +283,9 @@ pointers between them for fast range scans.</p>
 <p>The cache-locality argument carries over to RAM. A node that fits inside
 one CPU cache line is far faster to scan linearly for a key than chasing
 log(n) pointer indirections through a binary tree. Modern in-memory
-indexes — <code>art-tree</code>, <code>Masstree</code>, B-trees in CockroachDB's KV layer —
-exploit this. The lesson is that "balanced binary tree" is rarely the
-right shape on real hardware once n is large; "balanced wide tree" is.</p>
+indexes — <code>art-tree</code>, <code>Masstree</code>, B-trees in CockroachDB&rsquo;s KV layer —
+exploit this. The lesson is that &ldquo;balanced binary tree&rdquo; is rarely the
+right shape on real hardware once n is large; &ldquo;balanced wide tree&rdquo; is.</p>
 <hr />
 <h2>Tries — when your keys are strings</h2>
 <p>A <strong>trie</strong> (or <strong>prefix tree</strong>) is a tree where each edge is one
@@ -308,17 +308,17 @@ character and each path from the root spells a key. Storing <code>cat</code>, <c
 <p><code>(*)</code> marks the end of a stored key. Lookup, insertion, and prefix
 search are all O(L) where L is the length of the key — independent of
 how many keys you have stored. That is the property nothing else gives
-you cleanly. Autocomplete uses tries. So do IP-routing tables ("longest
-prefix match"). Spell checkers. Subword tokenisers. The DAWG variant
+you cleanly. Autocomplete uses tries. So do IP-routing tables (&ldquo;longest
+prefix match&rdquo;). Spell checkers. Subword tokenisers. The DAWG variant
 collapses suffixes for huge memory savings; modern BPE tokenisers in
-LLM pipelines often build a trie internally so that "matching the
-longest token at this position" runs in time linear in the token's
-length, not the vocabulary's size.</p>
+LLM pipelines often build a trie internally so that &ldquo;matching the
+longest token at this position&rdquo; runs in time linear in the token&rsquo;s
+length, not the vocabulary&rsquo;s size.</p>
 <hr />
 <h2>Big-O summary</h2>
 <p>[[BIG-O TABLE IMAGE]]</p>
 <p>Three things to read off this table. <strong>Balanced</strong> is doing the work in
-every "log n" — an unbalanced BST or KD-tree is O(n) in the worst case,
+every &ldquo;log n&rdquo; — an unbalanced BST or KD-tree is O(n) in the worst case,
 which is the most common bug in this whole topic. <strong>Construction is more
 expensive than query</strong> — building a KD-tree is O(n log n), but if you
 will run a million queries against it, that is a one-time cost amortised
@@ -330,8 +330,8 @@ choice for string-keyed work.</p>
 <p>Trees are the load-bearing structure under more of the stack than any
 other shape we have looked at.</p>
 <p><strong>Gradient boosting wins tabular ML.</strong> XGBoost, LightGBM, and CatBoost are
-all "build many shallow decision trees, each correcting the previous
-ensemble's errors." Every Kaggle competition on tabular data, every credit
+all &ldquo;build many shallow decision trees, each correcting the previous
+ensemble&rsquo;s errors.&rdquo; Every Kaggle competition on tabular data, every credit
 scoring model, every churn classifier in production at scale — almost
 always boosted trees. Deep learning has not displaced them on this problem
 because the trees encode the right inductive bias for low-dimensional,
@@ -344,7 +344,7 @@ a regulator. The trade-off against a neural network is paid in
 performance but bought back in audit trail.</p>
 <p><strong>Monte Carlo Tree Search.</strong> AlphaGo, AlphaZero, MuZero, and most modern
 game-playing systems use MCTS to balance exploration and exploitation in
-a game tree. The "tree" is the game state space; nodes are positions,
+a game tree. The &ldquo;tree&rdquo; is the game state space; nodes are positions,
 edges are moves, leaves are terminal positions or rollouts. Each
 simulated playout updates statistics on the visited nodes, and the next
 move is picked from the root using the <strong>UCB1</strong> formula. It is one of
@@ -358,14 +358,14 @@ manipulation rather than string substitution because edits at the AST
 level cannot break syntax by accident. Treesitter and Babel are
 production-grade tree libraries that have quietly become the substrate
 of modern code tooling.</p>
-<p><strong>R-trees for spatial indexes.</strong> GeoPandas, PostGIS, MongoDB's <code>2dsphere</code>
-index, every "find restaurants within 1km" query — all built on
+<p><strong>R-trees for spatial indexes.</strong> GeoPandas, PostGIS, MongoDB&rsquo;s <code>2dsphere</code>
+index, every &ldquo;find restaurants within 1km&rdquo; query — all built on
 <strong>R-trees</strong>, which generalise B-trees to bounding boxes in two or more
 dimensions. Same fan-out logic, same logarithmic height, applied to
 geometry instead of scalar keys.</p>
 <p><strong>Sum-trees in prioritised experience replay.</strong> Part 7 mentioned this in
 passing. A <strong>sum-tree</strong> is a binary tree where each internal node stores
-the sum of its children's leaf weights. Sampling proportional to weight
+the sum of its children&rsquo;s leaf weights. Sampling proportional to weight
 becomes O(log n): generate a random number in <code>[0, total]</code>, walk down
 the tree picking the child whose subtree sum contains the target. DeepMind
 used it in the original prioritised replay paper, and it is now standard
@@ -382,7 +382,7 @@ across runs.</p>
 ones inside GPT, Claude, and Llama) match the longest known token at
 each position in the input string. The fastest implementations build a
 trie of the vocabulary at startup, so each token match is O(L) in the
-token's length rather than O(V) in the vocabulary's size. With
+token&rsquo;s length rather than O(V) in the vocabulary&rsquo;s size. With
 vocabularies of 100k+ tokens that difference is the kind of thing that
 shows up in tail latency of a serving stack.</p>
 <hr />
@@ -410,9 +410,9 @@ implementation, or use the right structure for your access pattern in
 the first place.</p>
 <hr />
 <h2>What comes next</h2>
-<p>Seven foundations down, one to go. Part 9 is <strong>Knowledge Graphs</strong> — the
-final foundation, and the one that ties the entire data-structure track
-back to where graphs left off in Part 5. We will look at triples,
+<p>Eight foundations down, four to go. Part 9 is <strong>Knowledge Graphs</strong> — the
+one that ties the entire data-structure track back to where graphs left
+off in Part 5. We will look at triples,
 ontologies, entity embeddings, and how knowledge graphs power the
 retrieval-augmented generation systems that sit underneath modern LLM
 applications.</p>

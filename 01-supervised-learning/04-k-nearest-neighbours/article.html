@@ -125,8 +125,8 @@ boundary, gives finer-grained probability estimates, and is
 usually a free improvement.</p>
 <hr />
 <h2>A worked example</h2>
-<p>The companion script generates a 2D synthetic dataset (300
-points, 3 well-separated Gaussian classes) and walks the
+<p>The companion script generates a 2D synthetic dataset (500
+points, 3 overlapping Gaussian classes) and walks the
 classifier through it. Here is the from-scratch core:</p>
 <pre><code class="language-python">class KNearestNeighbours:
     def __init__(self, k=5, weights=&quot;uniform&quot;):

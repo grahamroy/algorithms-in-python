@@ -50,7 +50,9 @@ terms plus the current noise:</p>
 <p>Confusingly, this is <em>not</em> the same as a rolling-window average.
 MA(q) means the current value is partly explained by the past
 <code>q</code> <em>shocks</em> — surprises in the past that linger and decay.
-ARIMA always has both AR and MA components combined.</p>
+An ARIMA model can combine both, but either order may be zero —
+an ARIMA(0,1,1) is pure MA on the differenced series, an
+ARIMA(2,1,0) pure AR.</p>
 <h3>I(d): integration / differencing</h3>
 <p>The &ldquo;integrated&rdquo; part handles non-stationarity. If the raw
 series has a trend or a unit root, the model is fit on the
