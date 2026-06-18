@@ -1,0 +1,377 @@
+<p>Matrix factorisation gave us a beautiful idea: represent every
+user and every item as a vector in the same <code>k</code>-dimensional
+space, and predict the affinity between them with a <strong>dot
+product</strong>. It won the Netflix Prize, it powers a generation of
+production recommenders, and it is the foundation everything
+else in this track builds on.</p>
+<p>But the dot product is a <em>fixed</em>, <em>linear</em> way of combining two
+vectors. <code>u_i · v_j = Σ_d u_{i,d} v_{j,d}</code> — multiply matching
+dimensions, add them up. It treats every latent dimension as
+independent and weights them all equally. There is no room for
+&ldquo;this user likes action films <em>only when</em> they&rsquo;re also short&rdquo;,
+no room for interactions <em>between</em> latent dimensions, no room
+for any non-linear structure in how a taste maps to a rating.</p>
+<p>In 2017, He et al. asked the obvious question: <strong>what if we let
+a neural network learn the interaction function instead of
+hard-coding it as a dot product?</strong> Keep the embeddings — one
+learned vector per user, one per item — but replace <code>u_i · v_j</code>
+with a small trained network that takes the two embeddings as
+input and outputs a score. The embeddings are still learned by
+backpropagation; the difference is that the <em>combination</em> step
+is now flexible and non-linear. They called it <strong>Neural
+Collaborative Filtering</strong> (NCF), and it became the template for
+the deep-learning generation of recommender systems.</p>
+<p>This article builds NCF from first principles. We will set up
+the implicit-feedback problem and the log-loss objective, then
+construct the three models from the paper — <strong>GMF</strong>
+(Generalised Matrix Factorisation, the dot product as a special
+case of a neural layer), <strong>MLP</strong> (concatenate the embeddings
+and learn the interaction with a multi-layer perceptron), and
+<strong>NeuMF</strong> (fuse the two into one model) — implement all three
+from scratch in numpy with negative sampling and
+backpropagation, and evaluate them on a synthetic problem whose
+ground-truth interaction is deliberately non-linear, using the
+standard leave-one-out HR@10 / NDCG@10 ranking protocol.</p>
+<hr />
+<h2>The setup: implicit feedback and a learned interaction</h2>
+<p>Matrix factorisation, as we built it in Part 1, predicted a
+real-valued rating. NCF is designed for the more common
+production setting: <strong>implicit feedback</strong>. We observe that a
+user clicked, played, or bought an item — a binary signal — and
+we never observe an explicit star rating. The matrix <code>Y</code> has</p>
+<pre><code>y_{i,j} = 1   if user i interacted with item j
+y_{i,j} = 0   otherwise (unobserved)
+</code></pre>
+<p>The zeros are not &ldquo;disliked&rdquo;; they are &ldquo;unknown&rdquo;. This is the
+same regime as implicit-feedback matrix factorisation, but NCF
+attacks it as a <strong>binary classification</strong> problem: learn a
+model <code>ŷ_{i,j} = f(i, j)</code> that outputs the probability that user
+<code>i</code> would interact with item <code>j</code>.</p>
+<p>Every model shares the same first step. Each user <code>i</code> maps to a
+learned <strong>embedding</strong> <code>p_i ∈ ℝ^k</code> (a row of a user embedding
+table <code>P</code>), each item <code>j</code> to <code>q_j ∈ ℝ^k</code> (a row of an item table
+<code>Q</code>). These are exactly the latent factor vectors of matrix
+factorisation. What changes is the <strong>interaction function</strong> <code>f</code>
+that turns <code>(p_i, q_j)</code> into a score. Matrix factorisation fixes
+<code>f(p_i, q_j) = p_i · q_j</code>. NCF <em>learns</em> it.</p>
+<p>The output is squashed through a sigmoid to a probability, and
+the model is trained to minimise <strong>binary cross-entropy</strong> (log
+loss) over observed positives and sampled negatives:</p>
+<pre><code>L = − Σ_{(i,j) ∈ Ω⁺ ∪ Ω⁻}
+        y_{i,j} log ŷ_{i,j} + (1 − y_{i,j}) log (1 − ŷ_{i,j})
+</code></pre>
+<p>where <code>Ω⁺</code> is the set of observed interactions and <code>Ω⁻</code> is a set
+of negatives sampled from the unobserved entries. We come back
+to negative sampling below; first, the three interaction
+functions.</p>
+<hr />
+<h2>Model 1: GMF — the dot product as a neural layer</h2>
+<p>Start by writing matrix factorisation in a form that makes the
+generalisation obvious. The dot product <code>p_i · q_j</code> is the sum
+of the <strong>element-wise product</strong> <code>p_i ⊙ q_j</code>:</p>
+<pre><code>p_i · q_j = Σ_d (p_i ⊙ q_j)_d = 1ᵀ (p_i ⊙ q_j)
+</code></pre>
+<p>So a dot product is: take the element-wise product vector, then
+collapse it to a scalar with a sum — equivalently, a dot with
+the all-ones vector. <strong>Generalised Matrix Factorisation</strong> makes
+two changes. First, replace the all-ones vector with a <em>learned</em>
+weight vector <code>h ∈ ℝ^k</code>, so different latent dimensions can
+matter more or less. Second, allow a non-linear output
+activation:</p>
+<pre><code>φ_GMF = p_i ⊙ q_j            (element-wise product, in ℝ^k)
+ŷ_{i,j} = σ(hᵀ φ_GMF + b)    (learned weights, sigmoid output)
+</code></pre>
+<p>Set <code>h = 1</code>, drop the bias, and use an identity output and you
+recover plain matrix factorisation exactly. GMF is therefore a
+strict generalisation: it can represent the dot product, plus a
+little more (per-dimension weighting). But the interaction is
+still <strong>bilinear</strong> — it only ever multiplies a user dimension by
+the <em>same</em> item dimension. No cross-dimension interaction, no
+non-linearity in how the factors combine. GMF is the dot
+product wearing a neural-network hat.</p>
+<hr />
+<h2>Model 2: MLP — learning the interaction</h2>
+<p>To capture interactions the dot product cannot, NCF takes a
+different route: <strong>concatenate</strong> the user and item embeddings
+into one <code>2k</code>-vector and feed it through a standard multi-layer
+perceptron with non-linear (ReLU) hidden layers.</p>
+<pre><code>z_0 = [ p_i ; q_j ]                      (concatenate, in ℝ^{2k})
+z_1 = ReLU(W_1 z_0 + b_1)
+z_2 = ReLU(W_2 z_1 + b_2)
+   ⋮
+ŷ_{i,j} = σ(hᵀ z_L + b)
+</code></pre>
+<p>The difference from GMF is fundamental. The element-wise product
+forces the model to compare dimension <code>d</code> of the user with
+dimension <code>d</code> of the item and nothing else. Concatenation throws
+both full vectors at the network and lets the weight matrices
+learn <em>whatever</em> combination of user and item dimensions
+predicts interaction — including cross terms (user dimension 3
+with item dimension 7) and, through the ReLU non-linearities,
+genuinely non-linear functions of the embeddings. A multi-layer
+perceptron is a universal function approximator; in principle it
+can learn any interaction function, not just the bilinear one.</p>
+<p>The cost is that the MLP has to discover the right interaction
+from scratch, and learning good embeddings <em>through</em> several
+non-linear layers from sparse binary feedback is a harder
+optimisation problem than learning them under a clean dot
+product. We will see this tension in the results.</p>
+<p>The typical architecture follows a <strong>tapered</strong> shape: the first
+hidden layer is widest and each subsequent layer halves, so the
+network compresses the concatenated embeddings down toward the
+scalar score. Here we use <code>2k → 32 → 16 → 1</code>. (We call this
+single funnel a &ldquo;tower&rdquo; only once below — in NeuMF, where two
+of them run side by side.)</p>
+<hr />
+<h2>Model 3: NeuMF — fusing the two</h2>
+<p>GMF gives you the reliable, well-behaved bilinear signal. The
+MLP gives you flexible non-linear capacity. <strong>NeuMF</strong> (Neural
+Matrix Factorisation) refuses to choose and fuses both into a
+single model.</p>
+<p>The key design decision: give the two towers <strong>separate
+embeddings</strong>. Forcing GMF and MLP to share one embedding table
+would couple their (quite different) representational needs and
+hurt both. So NeuMF learns a GMF user/item embedding <em>and</em> an
+independent MLP user/item embedding. Each tower runs to its last
+layer; the two final vectors are concatenated and passed to a
+single output layer:</p>
+<pre><code>φ_GMF = p_i^G ⊙ q_j^G                       (GMF tower)
+φ_MLP = ReLU(W_2 ReLU(W_1 [p_i^M ; q_j^M]))  (MLP tower, last layer)
+ŷ_{i,j} = σ( hᵀ [ φ_GMF ; φ_MLP ] + b )      (fuse and predict)
+</code></pre>
+<p>The output layer learns how much to trust the linear GMF signal
+versus the non-linear MLP signal, <em>per dimension</em>. In the
+original paper NeuMF is pre-trained — train GMF and MLP
+separately, then initialise NeuMF from their weights and
+fine-tune — which squeezes out the last bit of accuracy. Our
+implementation trains it end-to-end from random initialisation,
+which is simpler and already enough to show the effect.</p>
+<hr />
+<h2>Training: negative sampling and log loss</h2>
+<p>There is one problem with the binary-classification framing:
+the observed data is <em>all positives</em>. Every entry in <code>Ω⁺</code> has
+label 1. A classifier trained only on positives learns to output
+1 for everything. We need negatives.</p>
+<p>We do not have explicit negatives (a zero means &ldquo;unknown&rdquo;, not
+&ldquo;disliked&rdquo;), so we <strong>sample</strong> them. For each observed positive
+<code>(i, j)</code>, draw a few items the user has not interacted with and
+label them 0. The standard ratio is around four negatives per
+positive. Each epoch resamples a fresh set, so over training the
+model sees many different unobserved pairs as negatives, which
+is a cheap, effective approximation to ranking every unobserved
+item below the observed ones.</p>
+<p>With positives and sampled negatives in hand, every model is
+trained the same way: forward pass to the sigmoid probability,
+binary cross-entropy loss, backpropagation through the
+interaction function and into the embedding tables, and a
+gradient step. We use <strong>Adam</strong> — adaptive per-parameter learning
+rates make training these small networks robust without much
+tuning, which is why it is the default optimiser for deep
+recommenders. The gradient with respect to an embedding row is
+<strong>sparse</strong>: only the users and items appearing in the
+mini-batch get updated, so the per-step cost scales with the
+batch, not with the size of the embedding tables.</p>
+<hr />
+<h2>A worked example</h2>
+<p>The companion script generates a synthetic implicit-feedback
+dataset — 500 users, 300 items — but with a deliberately
+<strong>non-linear ground truth</strong>. The true affinity between a user
+and an item is a <em>sum of rectified group-wise dot products</em>:
+the latent dimensions are split into groups, each group
+contributes <code>ReLU(u_g · v_g)</code>, and the affinities are summed. No
+single dot product can reproduce a sum of rectified dot
+products, but an MLP — which computes exactly sums of rectified
+linear combinations — can. This is the regime NCF was built for.</p>
+<p>The highest-affinity items become each user&rsquo;s observed
+interactions; we hold out one interaction per user for testing,
+train on the rest with four sampled negatives per positive, and
+evaluate with the standard <strong>leave-one-out</strong> protocol: rank each
+user&rsquo;s held-out item against 99 items they never touched, and
+report <strong>HR@10</strong> (was the held-out item in the top 10?) and
+<strong>NDCG@10</strong> (how <em>highly</em> was it ranked?).</p>
+<pre><code>DEMO --- Neural Collaborative Filtering on synthetic implicit feedback
+  Users                : 500
+  Items                : 300
+  Interaction type     : implicit (non-linear teacher)
+  Observed interactions: 12500 (8.3% density)
+  Eval protocol        : leave-one-out, 1 + 99 negatives, HR@10 / NDCG@10
+
+  Model                        params     HR@10    NDCG@10
+  ------------------------   --------   -------   --------
+  Popularity (baseline)             —     0.248      0.126
+  GMF (dot-product gen.)        12817     0.750      0.537
+  MLP (learned interaction)     14401     0.566      0.354
+  NeuMF (GMF + MLP fusion)      27217     0.750      0.594
+</code></pre>
+<p>Four observations.</p>
+<p><strong>Personalisation crushes popularity.</strong> Recommending the most
+popular items gets HR@10 0.25 — a held-out item lands in the top
+10 a quarter of the time, barely above the 0.10 you would get by
+chance. Every learned model more than doubles it. As with matrix
+factorisation, the headline value of collaborative filtering is
+visible in one number.</p>
+<p><strong>GMF is a strong baseline — the dot product is hard to beat.</strong>
+Even though the ground truth is non-linear, GMF reaches HR@10
+0.75. A flexible, well-trained bilinear model captures a great
+deal of the structure, and on this problem it comfortably
+out-ranks the pure MLP. This is the honest and important lesson
+of NCF: the dot product is not a weakling you trivially
+improve on. Decades of recommender systems ran on it for good
+reason.</p>
+<p><strong>The pure MLP underperforms — capacity is not the same as
+accuracy.</strong> The MLP <em>should</em> win on this dataset: the teacher
+is a sum of rectified group-wise dot products, exactly the
+class of function a ReLU MLP can represent and a single dot
+product cannot. It still lands at HR@10 0.57, below GMF. The
+MLP has the representational power; it just cannot reliably
+<em>find</em> it. Learning good embeddings through several non-linear
+layers from sparse binary feedback is a genuinely harder
+optimisation problem, and the extra flexibility buys
+overfitting and training difficulty before it buys accuracy.
+He et al. found the same thing — MLP alone is not reliably
+better than MF — and it is precisely <em>why</em> they proposed the
+fusion.</p>
+<p><strong>NeuMF gets the best of both.</strong> Fusing the towers matches GMF&rsquo;s
+HR@10 (0.75) and clearly wins on NDCG@10 (0.594 vs 0.537) — it
+ranks the held-out item <em>higher</em> on average. The output layer
+leans on GMF for the reliable linear signal and on the MLP for
+the non-linear residual the dot product misses, and the
+combination ranks better than either tower alone. That is the
+entire thesis of the paper in one row of a table.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Let <code>n</code> users, <code>m</code> items, <code>k</code> the embedding dimension, <code>|Ω⁺|</code>
+the observed interactions, and <code>H</code> the total width of the MLP
+hidden layers.</p>
+<p><strong>GMF forward/backward</strong>: <code>O(k)</code> per <code>(i, j)</code> pair — one
+element-wise product and a dot. Identical asymptotics to plain
+matrix factorisation; the learned weight vector adds nothing to
+the order.</p>
+<p><strong>MLP forward/backward</strong>: <code>O(k + H²)</code>-ish per pair, dominated by
+the dense hidden-layer matrix multiplies. For the small towers
+typical of recommenders (<code>H</code> in the low hundreds) this is still
+cheap, but it is a constant-factor heavier than GMF.</p>
+<p><strong>Training</strong>: <code>O(E · |Ω⁺| · (1 + n_neg) · cost_per_pair)</code> for
+<code>E</code> epochs with <code>n_neg</code> sampled negatives per positive. Negative
+sampling multiplies the data by <code>(1 + n_neg)</code>; everything else
+is standard mini-batch SGD. Embedding gradients are <strong>sparse</strong> —
+<code>O(batch · k)</code> memory and updates per step, independent of the
+table sizes.</p>
+<p><strong>Memory</strong>: <code>O((n + m) · k)</code> for the embedding tables (NeuMF
+doubles this — separate tables per tower) plus the small dense
+MLP weights. The embeddings dominate, exactly as in matrix
+factorisation.</p>
+<p><strong>Prediction / serving</strong>: this is the catch. GMF and MF can
+serve top-N with a single matrix multiply and, crucially, with
+<strong>approximate nearest-neighbour</strong> indexes over the item
+embeddings — because the score is a dot product, sub-linear
+retrieval is possible. NeuMF&rsquo;s score is an arbitrary neural
+function of <code>(i, j)</code>, so scoring a user against <code>m</code> items is <code>m</code>
+separate forward passes, with <strong>no</strong> ANN shortcut. NCF buys
+accuracy at the cost of cheap retrieval — the tension the
+two-tower architecture (Part 3) exists to resolve.</p>
+<hr />
+<h2>Real-world ML and AI connections</h2>
+<p><strong>The paper itself.</strong> <em>Neural Collaborative Filtering</em> (He,
+Liao, Zhang, Nie, Hu, Chua, WWW 2017) is one of the most-cited
+recommender-systems papers of the deep-learning era. It
+reframed collaborative filtering as learning an interaction
+function and gave the field the GMF / MLP / NeuMF vocabulary.</p>
+<p><strong>The embedding-plus-MLP template.</strong> The NCF recipe — learn an
+embedding per categorical entity, concatenate, push through an
+MLP — is the backbone of nearly every deep recommender that
+followed: YouTube&rsquo;s deep candidate and ranking networks, the
+deep half of <strong>Wide &amp; Deep</strong> (Google Play), <strong>DeepFM</strong>, and the
+ranking stacks at essentially every large platform.</p>
+<p><strong>Two-tower retrieval (next in this track).</strong> NCF&rsquo;s serving
+problem — you cannot ANN-index an arbitrary neural score —
+directly motivates the two-tower design, where user and item
+each get an independent tower and the final score is forced back
+to a dot product <em>so that</em> fast retrieval works. Two-tower is
+NCF&rsquo;s lesson applied at web scale.</p>
+<p><strong>Factorisation Machines and their neural descendants.</strong> GMF&rsquo;s
+&ldquo;weighted element-wise product&rdquo; sits next to FMs, which model
+all pairwise feature interactions with shared embeddings; DeepFM
+and xDeepFM fuse that idea with an MLP in the same spirit as
+NeuMF fuses GMF and MLP.</p>
+<p><strong>Log loss + negative sampling everywhere.</strong> The
+binary-classification-with-sampled-negatives framing is the same
+machinery behind word2vec&rsquo;s skip-gram with negative sampling,
+contrastive learning, and most retrieval training. NCF is a
+clean place to see it.</p>
+<p><strong>Pre-training and fusion.</strong> NeuMF&rsquo;s &ldquo;train the parts, then fuse
+and fine-tune&rdquo; is an early, concrete instance of the
+pre-train-then-combine pattern that now dominates large-scale
+ML.</p>
+<hr />
+<h2>When NOT to use Neural Collaborative Filtering</h2>
+<p><strong>When retrieval has to be fast over millions of items.</strong> This
+is the big one. NeuMF&rsquo;s score is not a dot product, so you
+cannot use an ANN index to fetch candidates — you would have to
+score every item with a forward pass. For large catalogues use a
+two-tower / dot-product model for retrieval and save the
+neural-interaction model for re-ranking a short candidate list.</p>
+<p><strong>When the dot product already fits.</strong> If the true interaction
+is mostly linear — and a great deal of collaborative signal is —
+matrix factorisation or GMF will match a neural model at a
+fraction of the cost and with far easier training. Our own
+results make the point: GMF tied NeuMF on HR@10. Reach for the
+MLP only when you have evidence of non-linear structure and
+enough data to learn it.</p>
+<p><strong>When data is scarce.</strong> Neural interaction functions have more
+parameters and more ways to overfit. On small or very sparse
+datasets, regularised matrix factorisation is usually the safer,
+stronger choice. NCF wants volume.</p>
+<p><strong>When you need cold-start handling out of the box.</strong> Like MF,
+NCF learns an embedding <em>per known user and item</em> and has
+nothing to say about an entity it never saw in training.
+Cold-start still needs side features (content, demographics) —
+which, incidentally, slot naturally into the MLP&rsquo;s input, one of
+NCF&rsquo;s genuine advantages over pure MF.</p>
+<p><strong>When you need explainability.</strong> &ldquo;The fused output layer
+weighted the MLP&rsquo;s third hidden unit at 0.4&rdquo; explains nothing.
+If recommendations must be justified to users or auditors,
+simpler or content-based models are more transparent.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 3 of the Recommender Systems track is <strong>Two-Tower
+Retrieval</strong> — the architecture that takes NCF&rsquo;s central lesson
+(learn rich embeddings) but deliberately keeps the final scoring
+a dot product, so that retrieving the best items from a
+hundred-million-item catalogue becomes an approximate
+nearest-neighbour lookup instead of a hundred million forward
+passes. It is the model that makes web-scale recommendation
+actually serveable, and it is the reason every large platform
+runs a <em>retrieve-then-rank</em> pipeline: a cheap two-tower model to
+fetch candidates, a heavy NCF-style model to rank them.</p>
+<p>Then comes <strong>Sequential Recommenders</strong>, which drop the
+assumption that a user&rsquo;s interactions are an unordered set and
+model them as a sequence — predicting the <em>next</em> interaction
+from the history.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/07-recommender-systems/02-neural-collaborative-filtering/neural_collaborative_filtering.py"><strong>neural_collaborative_filtering.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python neural_collaborative_filtering.py
+</code></pre>
+<p>It needs only <code>numpy</code>. The script generates a synthetic
+implicit-feedback dataset with a deliberately non-linear
+ground-truth interaction, then builds all three NCF models —
+GMF, MLP, and NeuMF — from scratch, including embedding tables,
+ReLU hidden layers, a hand-written Adam optimiser, negative
+sampling, and full backpropagation. It trains each model with
+binary cross-entropy and evaluates them with the leave-one-out
+HR@10 / NDCG@10 ranking protocol against a popularity baseline.
+The headline insight worth pinning to the wall: <strong>Neural
+Collaborative Filtering replaces matrix factorisation&rsquo;s fixed
+dot product with a learned interaction function; GMF is the dot
+product generalised, the MLP learns non-linear interactions the
+dot product cannot, and NeuMF fuses both — but the dot product
+is a strong baseline, the pure MLP is not automatically better,
+and the fusion&rsquo;s win comes with the loss of cheap dot-product
+retrieval that the next model exists to recover</strong>.</p>
+<hr />
+<p><em>This is Part 2 of the Recommender Systems track in the Algorithms in Python series. The companion script <code>neural_collaborative_filtering.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. Part 1 introduced Matrix Factorisation — the dot product NCF generalises. Part 3 of this track will look at Two-Tower Retrieval — keeping the dot product on purpose, so web-scale retrieval stays fast.</em></p>
