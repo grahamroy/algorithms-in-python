@@ -6,3 +6,7 @@ _manifest.html
 
 # Companion-script run outputs (reproducible from the .py files)
 *_results.png
+
+# Python bytecode cache (created when companion scripts run)
+__pycache__/
+*.pyc
