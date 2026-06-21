@@ -94,8 +94,8 @@ clear explanations and Python implementations.
 ### 08 — Reinforcement Learning
 | # | Algorithm | Status |
 |---|-----------|--------|
-| 1 | Q-Learning | ⬜ |
-| 2 | SARSA | ⬜ |
+| 1 | Q-Learning | ✅ |
+| 2 | SARSA | ✅ |
 | 3 | Deep Q-Networks (DQN) | ⬜ |
 | 4 | Policy Gradient Methods | ⬜ |
 | 5 | Advantage Actor-Critic (A2C / A3C) | ⬜ |

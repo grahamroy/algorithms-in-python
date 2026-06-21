@@ -1,0 +1,289 @@
+<p>Part 1 left us standing at the edge of a cliff. Q-Learning
+learned the <em>optimal</em> path across the Cliff Walking grid — the
+shortest route, hugging the very edge of the drop — and then,
+because it kept exploring with a small <code>ε</code>, repeatedly stepped
+off that edge during training and posted a mediocre online
+return. It learned the bravest policy and paid for its bravery.</p>
+<p>There is a different way to learn, and it differs from
+Q-Learning by <strong>a single term in the update rule</strong>. That one
+change turns the bravest learner into a cautious one — and on
+the cliff, the cautious learner does <em>better</em> in practice.</p>
+<p>The algorithm is <strong>SARSA</strong> (Rummery &amp; Niranjan, 1994; the name
+is from the quintuple it uses: State, Action, Reward, next
+State, next Action). It is the <strong>on-policy</strong> counterpart to
+Q-Learning&rsquo;s off-policy learning, and the contrast between them
+is the single cleanest illustration of one of reinforcement
+learning&rsquo;s most important distinctions. They share the same
+temporal-difference machinery, the same ε-greedy exploration,
+the same grid-world — and they learn <em>different policies</em>,
+because they answer subtly different questions. Q-Learning asks
+&ldquo;what is the value of acting optimally from here?&rdquo; SARSA asks
+&ldquo;what is the value of acting the way I <em>actually</em> act,
+exploration and all?&rdquo;</p>
+<p>This article builds SARSA from first principles, sets its
+update beside Q-Learning&rsquo;s so the one-term difference is
+unmissable, runs both on the <em>identical</em> Cliff Walking
+environment from Part 1, and shows SARSA learning a visibly
+safer path with a better online return. The on-policy /
+off-policy distinction it draws runs through the whole of
+reinforcement learning.</p>
+<hr />
+<h2>The one-term difference</h2>
+<p>Recall Q-Learning&rsquo;s update. After taking action <code>a</code> in state
+<code>s</code>, observing reward <code>r</code> and next state <code>s'</code>, it nudges
+<code>Q(s, a)</code> toward:</p>
+<pre><code>Q-Learning target  =  r + γ · max_{a'} Q(s', a')
+</code></pre>
+<p>The <code>max</code> is the key: Q-Learning bootstraps from the <em>best
+possible</em> next action, whatever the agent goes on to actually
+do. It learns the value of the greedy (optimal) policy even
+while behaving non-greedily. That is what <strong>off-policy</strong> means
+— the policy being <em>learned</em> (greedy) differs from the policy
+being <em>followed</em> (ε-greedy).</p>
+<p>SARSA changes exactly one thing. It bootstraps from the action
+the agent <em>actually takes next</em> — call it <code>a'</code>, chosen by the
+same ε-greedy policy:</p>
+<pre><code>SARSA target  =  r + γ · Q(s', a')
+</code></pre>
+<p>No <code>max</code>. The next action <code>a'</code> is whatever the behaviour policy
+picks — sometimes greedy, sometimes a random exploratory step.
+SARSA learns the value of the policy it is <em>actually following</em>,
+exploration included. That is <strong>on-policy</strong>: the policy learned
+<em>is</em> the policy followed.</p>
+<p>The full update:</p>
+<pre><code>SARSA(s, a, r, s', a'):
+    Q(s, a) ← Q(s, a) + α · ( r + γ·Q(s', a') − Q(s, a) )
+</code></pre>
+<p>This is where the name comes from — the update needs the whole
+quintuple <strong>(s, a, r, s&rsquo;, a&rsquo;)</strong>. Q-Learning only needs
+(s, a, r, s&rsquo;) because its <code>max</code> invents the next action rather
+than waiting to see it.</p>
+<hr />
+<h2>Why one term changes the policy</h2>
+<p>It sounds like a technicality. It is not. Consider a state one
+step from the cliff edge. The greedy action is &ldquo;move along the
+edge toward the goal&rdquo; — fast and, if executed perfectly, safe.</p>
+<p><strong>Q-Learning</strong> evaluates that state with <code>max_{a'} Q(s', a')</code>:
+it assumes the <em>next</em> action will also be the optimal,
+edge-hugging one. It never charges the edge state for the risk
+that exploration might, 10% of the time, fling the agent off
+the cliff. So Q-Learning happily learns the edge path is best.</p>
+<p><strong>SARSA</strong> evaluates the same state with <code>Q(s', a')</code> for the
+action actually taken — which, 10% of the time, <em>is</em> the random
+step off the cliff. That −100 gets averaged into the edge
+state&rsquo;s value. The edge becomes genuinely less valuable <em>under
+the policy SARSA is following</em>, so SARSA learns to route one or
+more rows away from it. It trades a couple of extra steps for a
+margin of safety against its own exploration.</p>
+<p>Neither is &ldquo;right&rdquo; in the abstract. Q-Learning learns the
+optimal policy for an agent that will <em>eventually stop
+exploring</em>. SARSA learns the best policy for an agent that
+<em>keeps exploring as it acts</em> — which is exactly the situation
+during online learning, and often the situation in deployment
+(a robot that never stops having sensor noise). On the cliff,
+that makes SARSA&rsquo;s policy the better one to <em>follow</em>.</p>
+<hr />
+<h2>The full algorithm</h2>
+<pre><code>SARSA(episodes, α, γ, ε):
+    Initialise Q(s, a) = 0 for all s, a
+    for each episode:
+        s = start state
+        a = ε-greedy(s)
+        while s is not terminal:
+            take a, observe r and s'
+            a' = ε-greedy(s')                 # pick next action FIRST
+            Q(s,a) ← Q(s,a) + α·(r + γ·Q(s',a') − Q(s,a))
+            s, a = s', a'
+    return Q
+</code></pre>
+<p>The structural difference from Q-Learning&rsquo;s loop: SARSA chooses
+the next action <code>a'</code> <em>before</em> updating, and reuses it as the
+action for the next step. Q-Learning updates first (using a
+<code>max</code>) and chooses fresh each iteration. Same skeleton, one
+extra commitment.</p>
+<p>A note on exploration. In Part 1 we <em>decayed</em> <code>ε</code> toward zero.
+For SARSA&rsquo;s safety behaviour to appear we deliberately keep <code>ε</code>
+<strong>fixed</strong> at 0.1 — because the whole point is to learn a policy
+that accounts for <em>persistent</em> exploration. If <code>ε</code> decays to
+zero, there is no exploration left to be cautious about, and
+SARSA converges to the same edge path as Q-Learning. The
+on-policy advantage is a statement about behaving <em>while</em>
+exploring. (This is also why Q-Learning&rsquo;s online return here,
+−41.8, differs slightly from the −43.7 in Part 1: that figure
+came from a decaying-<code>ε</code> run, whereas the head-to-head below
+holds <code>ε</code> fixed at 0.1 for both algorithms so the only
+difference between them is the update rule.)</p>
+<hr />
+<h2>A worked example: the same cliff, a safer route</h2>
+<p>The companion script runs SARSA on the <em>identical</em> Cliff
+Walking grid from Part 1, with a fixed <code>ε = 0.1</code>, and puts it
+head-to-head with Q-Learning on the same setup.</p>
+<pre><code>DEMO 1 --- SARSA (on-policy) on Cliff Walking
+  Grid              : 4 x 12  (cliff along the bottom edge)
+  Episodes          : 1000
+  alpha=0.5  gamma=0.95  epsilon=0.1 (FIXED, not decayed)
+
+  Learned greedy path length     : 17 steps
+  Mean return, last 50 episodes  : -25.1
+  Greedy path uses rows          : [0, 1, 2, 3]  (0=top, 3=cliff row)
+</code></pre>
+<pre><code>DEMO 2 --- SARSA vs Q-Learning (online return)
+  Q-Learning (off-policy)  mean return : -41.8   (optimal edge path, falls during exploration)
+  SARSA      (on-policy)   mean return : -25.1   (safer path, fewer falls)
+
+  SARSA online return is higher (less negative) by 16.7 despite a longer path —
+  it accounts for its own exploration and stays away from the edge.
+</code></pre>
+<pre><code>DEMO 3 --- Learned greedy policies side by side
+  S=start  G=goal  #=cliff
+
+  SARSA (safer):
+    &gt; &gt; &gt; &gt; &gt; &gt; &gt; &gt; &gt; &gt; &gt; v
+    ^ &lt; &gt; ^ ^ ^ ^ ^ ^ ^ v v
+    ^ ^ &lt; ^ ^ ^ ^ ^ &gt; ^ &gt; v
+    S # # # # # # # # # # G
+
+  Q-Learning (edge):
+    &gt; &gt; &gt; &lt; &gt; &gt; v &gt; &gt; &gt; v v
+    &gt; &gt; &gt; v v v &gt; v v &gt; v v
+    &gt; &gt; &gt; &gt; &gt; &gt; &gt; &gt; &gt; &gt; &gt; v
+    S # # # # # # # # # # G
+</code></pre>
+<p>Three observations.</p>
+<p><strong>SARSA learns the safe route; Q-Learning learns the edge.</strong>
+The policy grids show it directly. SARSA climbs away from the
+cliff — up to the top rows — runs across, and only drops to the
+goal at the end: a 17-step path that keeps maximum distance
+from the drop. Q-Learning runs along row 2, one single step
+above the cliff: the 13-step optimal path. Same environment,
+same reward function, two genuinely different policies — and
+the only code difference is <code>max_{a'} Q(s', a')</code> versus
+<code>Q(s', a')</code>.</p>
+<p><strong>SARSA&rsquo;s online return is better: −25.1 vs −41.8.</strong> This is
+the headline. Q-Learning&rsquo;s path is <em>shorter and optimal</em>, yet
+its actual return during training is <em>worse</em> by 16.7, because
+walking the cliff edge with a 10% random step means falling off
+regularly for −100 apiece. SARSA&rsquo;s longer-but-safer route
+almost never falls, so the return it actually <em>earns while
+learning</em> is higher. When the agent must perform well <em>while</em>
+exploring, on-policy wins.</p>
+<p><strong>This is the exact gap Part 1 set up.</strong> Q-Learning learns the
+brave-optimal policy and pays for its bravery next to the
+hazard; SARSA sacrifices two steps of optimality to stop paying
+that price. Neither is wrong — they optimise different things —
+but the −16.7 difference in online return is the clearest
+single number in RL for &ldquo;off-policy learns the optimal target;
+on-policy learns the safer behaviour.&rdquo;</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>SARSA&rsquo;s costs are <em>identical</em> to Q-Learning&rsquo;s — it is the same
+tabular TD method with one term swapped:</p>
+<p><strong>Per step</strong>: <code>O(|A|)</code> — ε-greedy action selection. SARSA
+actually does slightly <em>less</em> work than Q-Learning per update:
+it reads a single <code>Q(s', a')</code> instead of computing a <code>max</code> over
+all next actions. A negligible difference, but SARSA is, if
+anything, marginally cheaper.</p>
+<p><strong>Per episode</strong>: <code>O(steps · |A|)</code>.</p>
+<p><strong>Memory</strong>: <code>O(|S| · |A|)</code> for the Q-table — the same scaling
+wall as Q-Learning. SARSA inherits the tabular limitation
+exactly: it works only when the state space is small enough to
+enumerate, and needs function approximation (the deep methods
+of Part 3 onward) for anything larger.</p>
+<p><strong>Convergence</strong>: SARSA converges to the optimal policy <em>if</em> <code>ε</code>
+is decayed to zero appropriately over time (the GLIE condition
+— Greedy in the Limit with Infinite Exploration). With a fixed
+<code>ε</code>, as here, it converges to the best policy <em>for that level
+of exploration</em> — which is precisely the safer cliff path we
+wanted to see.</p>
+<hr />
+<h2>On-policy vs off-policy: the deeper distinction</h2>
+<p>The cliff is a vivid illustration of a split that runs through
+all of reinforcement learning.</p>
+<p><strong>Off-policy</strong> methods (Q-Learning, DQN, Q-learning&rsquo;s whole
+descendant family) learn about one policy — usually the optimal
+greedy one — while following another. Their great advantage:
+they can learn the optimal policy from <em>any</em> source of
+experience, including random exploration, old logged data, or a
+human demonstrator. This is what makes <strong>experience replay</strong>
+possible (DQN reuses old transitions) and what makes <strong>offline
+RL</strong> — learning purely from a fixed dataset — feasible.</p>
+<p><strong>On-policy</strong> methods (SARSA, and the policy-gradient methods
+of Part 4 — REINFORCE, A2C, PPO) learn about the policy they
+are following. Their advantage: they account for the actual
+behaviour, including its exploration and its risks, which makes
+them more stable in many settings and better-suited to the
+&ldquo;perform well <em>while</em> learning&rdquo; regime. Their cost: they cannot
+freely reuse off-policy data, so they are often less
+sample-efficient.</p>
+<p>The trade-off recurs at every level of the field. PPO — the
+algorithm behind most RLHF for language models — is on-policy,
+and a great deal of its engineering is about squeezing more
+reuse out of on-policy data. DQN and its variants are
+off-policy precisely so they <em>can</em> replay. Understanding why
+SARSA routes around the cliff is understanding the seed of that
+entire design axis.</p>
+<hr />
+<h2>When to use SARSA over Q-Learning</h2>
+<p><strong>When the agent must perform well <em>while</em> learning.</strong> Online
+control where mistakes during training are costly — a system
+serving real traffic, a robot that can actually break — favours
+SARSA&rsquo;s account of its own exploration. It optimises the policy
+you are <em>running</em>, not an idealised greedy one you may never
+purely follow.</p>
+<p><strong>When exploration is persistent and risky.</strong> If <code>ε</code> (or any
+exploration source) never fully vanishes and bad actions are
+genuinely dangerous, SARSA&rsquo;s safety margin is the right
+behaviour. The cliff is the canonical example.</p>
+<p><strong>Prefer Q-Learning (off-policy) when</strong> you want the optimal
+policy regardless of how you explore, when you need to learn
+from logged or replayed data, or when exploration will be
+turned off at deployment so the edge path becomes safe to
+follow. Off-policy&rsquo;s flexibility is why the deep-RL mainstream
+(DQN and descendants) is off-policy.</p>
+<p><strong>Prefer neither tabular method when</strong> the state space is large
+or continuous — both hit the <code>O(|S| · |A|)</code> table wall, and the
+next articles (Deep Q-Networks, policy gradients) replace the
+table with a neural network.</p>
+<p>There is also a middle ground worth knowing: <strong>Expected SARSA</strong>
+replaces <code>Q(s', a')</code> with the <em>expectation</em> over the
+ε-greedy policy&rsquo;s next action, <code>Σ_{a'} π(a'|s')·Q(s', a')</code> —
+lower variance than SARSA, and it reduces to Q-Learning when
+the policy is greedy. It is a clean unification of the two
+update rules, and a common practical default.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 3 of the Reinforcement Learning track is <strong>Deep Q-Networks
+(DQN)</strong> — the algorithm that broke the <code>O(|S| · |A|)</code> table
+wall both Q-Learning and SARSA hit. Instead of storing a value
+for every state-action pair, DQN <em>approximates</em> <code>Q(s, a)</code> with
+a neural network, letting it learn from raw, high-dimensional
+state (Atari pixels, for instance). It keeps Q-Learning&rsquo;s
+off-policy <code>max</code> and adds the two stabilising tricks —
+<strong>experience replay</strong> and a <strong>target network</strong> — that made deep
+value-based RL actually work. It is where tabular RL ends and
+deep RL begins.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/08-reinforcement-learning/02-sarsa/sarsa.py"><strong>sarsa.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python sarsa.py
+</code></pre>
+<p>It needs only <code>numpy</code>. The script implements SARSA from scratch
+on the identical Cliff Walking grid-world used for Q-Learning
+in Part 1 — the on-policy TD update, fixed-<code>ε</code> exploration, and
+a head-to-head against Q-Learning on the same environment —
+then prints both online returns and both learned policies as
+arrow grids so the safe-vs-edge contrast is visible at a
+glance. The headline insight worth pinning to the wall:
+<strong>SARSA differs from Q-Learning by a single term — it
+bootstraps from the action it actually takes (<code>Q(s', a')</code>)
+rather than the best one (<code>max Q(s', a')</code>) — which makes it
+on-policy: it learns the value of the policy it is following,
+exploration and all, and on the cliff that means a safer path
+and a better online return (−25.1 vs −41.8) despite a longer
+route</strong>.</p>
+<hr />
+<p><em>This is Part 2 of the Reinforcement Learning track in the Algorithms in Python series. The companion script <code>sarsa.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/43aafeeae6d8">Part 1</a> covered Q-Learning — the off-policy method SARSA is contrasted against here. Part 3 will look at Deep Q-Networks, which replace the Q-table with a neural network to break the tabular scaling wall.</em></p>
