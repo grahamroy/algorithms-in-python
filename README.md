@@ -96,7 +96,7 @@ clear explanations and Python implementations.
 |---|-----------|--------|
 | 1 | Q-Learning | ✅ |
 | 2 | SARSA | ✅ |
-| 3 | Deep Q-Networks (DQN) | ⬜ |
+| 3 | Deep Q-Networks (DQN) | ✅ |
 | 4 | Policy Gradient Methods | ⬜ |
 | 5 | Advantage Actor-Critic (A2C / A3C) | ⬜ |
 

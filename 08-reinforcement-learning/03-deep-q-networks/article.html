@@ -1,0 +1,302 @@
+<p>Parts 1 and 2 of this track — Q-Learning and SARSA — both ended
+at the same wall. They store one number for every
+state-action pair in a table, <code>Q(s, a)</code>, and that table has a
+hard size limit: <code>O(|S| · |A|)</code>. On the 48-square Cliff Walking
+grid that is fine. On almost anything real it is hopeless. The
+moment the state stops being a handful of discrete squares — the
+moment it becomes, say, <em>four continuous numbers</em> — the table
+needs infinitely many rows and the whole approach collapses.</p>
+<p><strong>Deep Q-Networks (DQN)</strong> break that wall with one idea: stop
+<em>storing</em> <code>Q(s, a)</code> and start <em>approximating</em> it. Replace the
+lookup table with a neural network that takes a state in and
+predicts a Q-value for each action. The table that needed a row
+per state becomes a function that generalises across states it
+has never seen. This is the step from tabular RL to <em>deep</em> RL,
+and it is the idea that let DeepMind&rsquo;s 2015 agent learn to play
+49 Atari games from raw pixels at human level (Mnih et al.,
+<em>Human-level control through deep reinforcement learning</em>,
+Nature 2015).</p>
+<p>But swapping a table for a network breaks the gentle
+convergence guarantees the table gave us, and a naive
+&ldquo;neural-network Q-learning&rdquo; is famously unstable — it diverges
+as often as it learns. DQN&rsquo;s real contribution is the <em>two
+tricks</em> that make function approximation actually work:
+<strong>experience replay</strong> and a <strong>target network</strong>. This article
+builds all of it from scratch in NumPy — the network, the
+backprop, the replay buffer, the target network — trains it on
+CartPole (a task with a genuinely continuous state, where a
+table is impossible), and runs the single cleanest experiment
+in deep RL: turn the target network off and watch learning
+fall apart.</p>
+<hr />
+<h2>The table wall, made concrete</h2>
+<p>Cliff Walking had 48 states. CartPole — the classic
+balance-a-pole-on-a-cart task — has a state of <strong>four
+continuous numbers</strong>: cart position, cart velocity, pole angle,
+and pole angular velocity. Each is a real number. The state
+<code>(0.013, −0.227, 0.041, 0.388)</code> will, in all likelihood, <em>never
+occur again exactly</em>. There is no row to look up and no row to
+update. A Q-table doesn&rsquo;t just get large here; it is the wrong
+data structure entirely.</p>
+<p>What we need is a function that <em>generalises</em>: that, having seen
+states near <code>(0.013, −0.227, 0.041, 0.388)</code>, can produce a
+sensible Q-value for it the first time it appears. That is
+exactly what a neural network does. So we define</p>
+<pre><code>Q(s, a; θ)  ≈  a neural network with weights θ
+              input:  the state s (4 numbers)
+              output: one Q-value per action (here, 2)
+</code></pre>
+<p>and learn the weights <code>θ</code> instead of table entries. The network
+is small — for CartPole, <code>4 → 64 → 64 → 2</code> is plenty — but the
+shift is profound: from memorising values to <em>learning a
+function</em>.</p>
+<hr />
+<h2>From a tabular update to a gradient step</h2>
+<p>Recall Q-Learning&rsquo;s tabular update. It nudged a stored value
+toward a target:</p>
+<pre><code>Q(s, a)  ←  Q(s, a) + α · ( r + γ·max_{a'} Q(s', a') − Q(s, a) )
+</code></pre>
+<p>With a network there is no entry to nudge — there are weights.
+So we turn the <em>same</em> temporal-difference idea into a
+<strong>regression problem</strong>. The thing we want <code>Q(s, a; θ)</code> to equal
+is the TD target</p>
+<pre><code>y  =  r + γ · max_{a'} Q(s', a'; θ)
+</code></pre>
+<p>and we train the network to predict it by minimising the
+squared error between prediction and target:</p>
+<pre><code>Loss(θ)  =  ( Q(s, a; θ) − y )²
+</code></pre>
+<p>One step of gradient descent on this loss moves the network&rsquo;s
+prediction toward the target — the function-approximation
+analogue of one tabular update. The <code>max_{a'}</code> is still there,
+so DQN is still <strong>off-policy</strong>, learning the value of the greedy
+policy exactly as Q-Learning did. (SARSA&rsquo;s on-policy variant has
+a deep analogue too, but DQN follows the Q-Learning branch.)</p>
+<p>If that were the whole story, this article would be one page
+long. It isn&rsquo;t, because that naive version <em>does not work</em>.</p>
+<hr />
+<h2>Why naive neural Q-learning falls apart — and the two fixes</h2>
+<p>Two things go wrong the moment you train a network this way, and
+each has a fix that is now standard equipment.</p>
+<p><strong>Problem 1: consecutive samples are deeply correlated.</strong> In an
+episode, each state is almost identical to the last. If you
+train the network on transitions in the order they happen, you
+feed it long runs of near-identical, highly-correlated data —
+exactly what gradient descent handles worst. The network
+overfits to whatever it&rsquo;s seeing right now and forgets what it
+learned a hundred steps ago.</p>
+<blockquote><p><strong>Fix — experience replay.</strong> Store every transition
+<code>(s, a, r, s', done)</code> in a large buffer, and train on <em>random
+minibatches sampled from it</em>. Sampling randomly breaks the
+temporal correlation, and reusing each transition many times
+makes the method far more sample-efficient. (Experience replay
+predates DQN — Long-Ji Lin proposed it in 1992 — but DQN is
+what made it essential.)</p></blockquote>
+<p><strong>Problem 2: the target chases the weights.</strong> Look at the loss
+again. The target <code>y = r + γ·max Q(s', a'; θ)</code> depends on the
+<em>same weights θ</em> we are updating. Every gradient step changes
+<code>θ</code>, which changes the target, which changes the next gradient
+step&rsquo;s goal. You are chasing a target that moves every time you
+step toward it — a feedback loop that sends the values
+spiralling.</p>
+<blockquote><p><strong>Fix — a target network.</strong> Keep a <em>second</em>, frozen copy of
+the network with weights <code>θ⁻</code>, and compute the target from it:
+<code>y = r + γ·max Q(s', a'; θ⁻)</code>. The online network <code>θ</code> is
+trained every step; the target network <code>θ⁻</code> is only updated
+<em>occasionally</em> — every few hundred steps we copy <code>θ</code> into
+<code>θ⁻</code>. Now the target holds still long enough for the online
+network to actually reach it. The target network was the key
+addition in the 2015 Nature paper, and it is the difference
+between learning and diverging — as the experiment below shows
+directly.</p></blockquote>
+<p>These two fixes are the whole reason DQN works. Everything else
+is standard neural-network training.</p>
+<hr />
+<h2>The full algorithm</h2>
+<pre><code>DQN(episodes, γ, lr, batch, C):
+    initialise online network θ randomly
+    initialise target network θ⁻ ← θ
+    initialise empty replay buffer D
+    for each episode:
+        s = reset environment
+        while not done:
+            a = ε-greedy action from Q(s, ·; θ)
+            take a, observe r, s', done
+            store (s, a, r, s', done) in D
+            s = s'
+ 
+            sample a random minibatch from D
+            y = r + γ · max_{a'} Q(s', a'; θ⁻) · (1 − done)
+            take a gradient step on ( Q(s, a; θ) − y )²
+            every C steps:  θ⁻ ← θ          # refresh target network
+    return θ
+</code></pre>
+<p>The <code>(1 − done)</code> term zeroes the bootstrap at terminal states —
+there is no future return after the episode ends. Beyond that,
+this is Q-Learning&rsquo;s loop with three additions: store to the
+buffer, train on a random batch, and periodically refresh the
+target network.</p>
+<hr />
+<h2>A worked example: balancing CartPole from scratch</h2>
+<p>The companion script implements all of the above in NumPy — a
+two-hidden-layer MLP with hand-written backprop and an Adam
+optimiser, a ring-buffer for replay, and a separate target
+network — and trains it on CartPole, where the agent earns +1
+for every step it keeps the pole upright, up to a cap of 500.</p>
+<pre><code>DEMO 1 --- DQN learns to balance CartPole
+  State : 4 continuous dims (cart pos/vel, pole angle/vel)
+          a Q-table is impossible -- the state never repeats
+  Network: 4 -&gt; 64 -&gt; 64 -&gt; 2   (one Q-value per action)
+  Episodes: 250  gamma=0.99  lr=1e-3  batch=64  replay=10000  target sync=200 steps
+ 
+  Mean return by 25-episode block (max possible = 500):
+    episodes   1- 25 :   21.8  #
+    episodes  26- 50 :   22.7  #
+    episodes  51- 75 :   24.2  ##
+    episodes  76-100 :   35.2  ##
+    episodes 101-125 :   45.0  ###
+    episodes 126-150 :   64.9  #####
+    episodes 151-175 :  144.8  ############
+    episodes 176-200 :  187.7  ###############
+    episodes 201-225 :  168.7  ##############
+    episodes 226-250 :  262.7  #####################
+ 
+  Final mean return (last 50 episodes): 215.7
+</code></pre>
+<p>The agent starts where a random policy sits — a return of about
+22, meaning the pole topples in roughly a fifth of a second.
+For the first hundred episodes almost nothing happens: it is
+filling the replay buffer and exploring with a high <code>ε</code>. Then,
+once there is enough varied experience to learn from, the return
+climbs steeply — past 64, past 144, to a final average of 215.
+The pole now stays up for over four seconds at a stretch. No
+table could represent this policy; the network learned a
+<em>function</em> over the continuous state.</p>
+<h3>The headline experiment: turn off the target network</h3>
+<p>Here is the cleanest demonstration in deep RL of why a design
+choice matters. Run the <em>exact same</em> DQN — same seed, same
+network, same hyperparameters, same replay buffer — and change
+one thing: compute the target from the live online network
+instead of the frozen target network.</p>
+<pre><code>DEMO 2 --- Why the target network matters (ablation)
+  The SAME DQN, the only change is whether the bootstrap target
+  comes from a slowly-updated copy of the network or the live one.
+ 
+  With target network    final mean return:  215.7   (stable)
+  Without target network final mean return:   75.0   (chases its own tail)
+ 
+  The target network lifts the final return by 140.7. Without it the
+  target moves every gradient step and learning is far less stable.
+</code></pre>
+<p>Same algorithm, one knob, nearly <strong>3× the performance</strong>. With
+the target frozen between refreshes, the online network has a
+stable goal to regress toward and climbs to 215. With the target
+recomputed from the live weights every step, it chases its own
+moving estimate and stalls at 75. This is the feedback loop from
+Problem 2, made visible — and it is exactly why the target
+network, not present in the original 2013 DQN, was the headline
+addition in the 2015 version.</p>
+<h3>The learned policy in action</h3>
+<p>Finally, run the trained network greedily (<code>ε = 0</code>) on fresh
+random starts it never trained on:</p>
+<pre><code>DEMO 3 --- The learned greedy policy in action
+  Greedy rollout (epsilon=0), seed 101: balanced 272 / 500 steps
+  Greedy rollout (epsilon=0), seed 202: balanced 253 / 500 steps
+  Greedy rollout (epsilon=0), seed 303: balanced 257 / 500 steps
+ 
+  Mean over 3 greedy rollouts: 261 / 500 steps
+</code></pre>
+<p>On states drawn from seeds it had never encountered, the policy
+balances the pole for ~261 steps on average — the
+generalisation a table could never give. (Train longer and this
+climbs toward the 500 cap; 250 episodes is enough to make the
+point in a few seconds.)</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>DQN trades the table&rsquo;s memory wall for the cost of training a
+network — a very different profile from the tabular methods.</p>
+<p><strong>Per gradient step</strong>: <code>O(B · W)</code> where <code>B</code> is the batch size
+and <code>W</code> is the number of network weights — one forward and one
+backward pass over a minibatch. This replaces the tabular
+update&rsquo;s <code>O(|A|)</code>.</p>
+<p><strong>Memory</strong>: <code>O(W + N·d)</code> — the network weights <code>W</code> plus the
+replay buffer of <code>N</code> transitions, each of size <code>d</code>. Crucially,
+this <strong>no longer depends on <code>|S|</code></strong>. That is the whole point: a
+continuous or astronomically large state space costs the same as
+a small one, because the network <em>generalises</em> instead of
+<em>enumerating</em>. The table wall is gone.</p>
+<p><strong>Sample efficiency</strong>: replay lets every transition be reused in
+many minibatches, so DQN squeezes far more learning out of each
+environment step than one-shot tabular updates — important when
+environment steps are expensive (a robot, a slow simulator).</p>
+<p>The trade-off is that the convergence guarantees of tabular
+Q-Learning are gone. With function approximation, a bootstrapped
+target, and off-policy data — Sutton&rsquo;s &ldquo;deadly triad&rdquo; — DQN can
+diverge. The two tricks tame it in practice, but DQN is an
+engineering achievement, not a theorem.</p>
+<hr />
+<h2>When to use DQN — and its limits</h2>
+<p><strong>Use DQN when</strong> the state is large or continuous (so a table is
+out) <strong>and</strong> the actions are a small discrete set (push
+left/right, one of a few moves). That combination — rich states,
+few actions — is DQN&rsquo;s sweet spot, and it is a large slice of
+real problems.</p>
+<p><strong>Reach for something else when:</strong></p>
+<ul>
+<li><strong>Actions are continuous</strong> (a steering angle, a joint torque).
+  DQN&rsquo;s <code>max_{a'}</code> requires enumerating actions, which is
+  impossible over a continuum. This is the domain of policy
+  gradients (Part 4) and actor-critic methods like DDPG and SAC.</li>
+<li><strong>You need the policy itself</strong>, perhaps stochastic — again
+  policy-gradient territory.</li>
+<li><strong>The problem is small and discrete</strong> — then tabular
+  Q-Learning or SARSA is simpler, exact, and has the convergence
+  guarantees DQN gives up.</li>
+</ul>
+<p><strong>The DQN family.</strong> Vanilla DQN kicked off a wave of
+improvements, each fixing a specific flaw: <strong>Double DQN</strong> (van
+Hasselt et al., 2016) corrects the <code>max</code> operator&rsquo;s tendency to
+<em>overestimate</em> Q-values; <strong>Dueling DQN</strong> (Wang et al., 2016)
+splits the network into state-value and advantage streams;
+<strong>Prioritized Experience Replay</strong> (Schaul et al., 2016) samples
+surprising transitions more often; and <strong>Rainbow</strong> (Hessel et
+al., 2018) combines six such extensions into one agent. They all
+share the spine you just built.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 4 of the Reinforcement Learning track turns to <strong>Policy
+Gradient Methods</strong>. DQN learns <em>values</em> and derives a policy
+from them with <code>argmax</code> — which is why it can&rsquo;t handle
+continuous actions. Policy gradients flip this around: they
+parameterise and optimise the <strong>policy directly</strong>, with no
+<code>max</code> and no value table, learning a probability distribution
+over actions that can be discrete <em>or</em> continuous. It is the
+other great branch of modern RL — the one that, via PPO,
+underlies the reinforcement learning behind today&rsquo;s language
+models.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/08-reinforcement-learning/03-deep-q-networks/dqn.py"><strong>dqn.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python dqn.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in well under a minute. Every
+piece is from scratch: the CartPole dynamics, a two-layer MLP
+with He initialisation and hand-written backprop, an Adam
+optimiser, a ring-buffer for experience replay, and a separate
+target network. (One honest detail: the script uses a plain
+squared-error loss, whereas the Atari DQN clipped both rewards
+and the TD error to ±1 — appropriate for pixel games, but it
+would throttle learning on CartPole&rsquo;s unclipped returns, which
+reach ~100.) The headline insight worth pinning to the wall:
+<strong>DQN replaces Q-Learning&rsquo;s table with a neural network so the
+state can be continuous — and the two tricks that make that work
+are experience replay (sample random past transitions to break
+correlation) and a target network (bootstrap from a frozen copy
+so the target holds still); turning the target network off alone
+drops CartPole performance from 215 to 75</strong>.</p>
+<hr />
+<p><em>This is Part 3 of the Reinforcement Learning track in the Algorithms in Python series. The companion script <code>dqn.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/43aafeeae6d8">Part 1</a> and Part 2 covered tabular Q-Learning and SARSA — the methods DQN scales past. Part 4 will look at Policy Gradient Methods, which optimise the policy directly and handle continuous actions.</em></p>
