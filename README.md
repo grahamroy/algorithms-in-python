@@ -98,7 +98,7 @@ clear explanations and Python implementations.
 | 2 | SARSA | ✅ |
 | 3 | Deep Q-Networks (DQN) | ✅ |
 | 4 | Policy Gradient Methods | ✅ |
-| 5 | Advantage Actor-Critic (A2C / A3C) | ⬜ |
+| 5 | Advantage Actor-Critic (A2C / A3C) | ✅ |
 
 ### 09 — Advanced Reinforcement Learning
 | # | Algorithm | Status |

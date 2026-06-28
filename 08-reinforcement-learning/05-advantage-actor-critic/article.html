@@ -1,0 +1,245 @@
+<p>This Reinforcement Learning track has, until now, been a story
+of two rival families. The <strong>value-based</strong> methods —
+Q-Learning, SARSA, DQN (Parts 1–3) — learn how good actions
+are, <code>Q(s, a)</code>, and act greedily. The <strong>policy-based</strong> method
+of Part 4, REINFORCE, throws values out and optimises the
+policy <code>π(a | s)</code> directly. Each has a signature weakness.
+Value methods can&rsquo;t handle continuous actions. REINFORCE can —
+but its learning signal, the Monte-Carlo return, is so noisy
+that it leans on a crude baseline (the <em>average</em> return) just to
+function.</p>
+<p><strong>Advantage Actor-Critic (A2C)</strong> ends the rivalry by using
+<em>both</em>. It runs two networks at once:</p>
+<ul>
+<li>an <strong>actor</strong> — the policy <code>π(a | s; θ)</code>, which decides what to
+  do (the policy-based half);</li>
+<li>a <strong>critic</strong> — a value function <code>V(s; w)</code>, which estimates how
+  good a state is (the value-based half).</li>
+</ul>
+<p>The critic&rsquo;s job is to be a <em>better baseline</em>. REINFORCE
+subtracted a single constant from every return; the critic
+subtracts a <strong>learned, state-dependent</strong> estimate <code>V(s)</code>,
+turning the raw return into an <strong>advantage</strong>:</p>
+<pre><code>A(s, a)  =  G  −  V(s)      &quot;how much better than expected&quot;
+</code></pre>
+<p>The actor is then nudged in proportion to the advantage, not
+the raw return. This is the synthesis the whole track has been
+building toward — and it is the template for nearly every modern
+RL algorithm, PPO included. This article builds A2C from scratch
+in NumPy — both networks, both updates — trains it on CartPole,
+and shows it learning <em>faster and more reliably</em> than the
+REINFORCE of Part 4.</p>
+<hr />
+<h2>The actor and the critic</h2>
+<p>The two networks divide the labour:</p>
+<p><strong>The actor</strong> is exactly the policy network from Part 4:
+<code>π(a | s; θ)</code>, a softmax over actions. It is updated by the same
+policy gradient — but weighted by the advantage instead of the
+return:</p>
+<pre><code>θ  ←  θ  +  α · ∇θ log π(a | s; θ) · A(s, a)
+</code></pre>
+<p><strong>The critic</strong> is a value network <code>V(s; w)</code> — one output, the
+estimated return from state <code>s</code>. It is trained by plain
+regression toward the actual return the agent saw:</p>
+<pre><code>w  ←  w  −  β · ∇w ( V(s; w) − G )²
+</code></pre>
+<p>The two learn <em>together</em>, in a loop: the critic learns to
+predict the actor&rsquo;s returns, and the actor uses the critic&rsquo;s
+predictions to find a better-than-expected action. The critic
+critiques; the actor acts on the critique.</p>
+<h3>Why a learned baseline beats a constant one</h3>
+<p>REINFORCE&rsquo;s baseline was the mean return — one number for every
+state. But states genuinely differ in value: a balanced pole
+upright in the centre is worth more than one tilting at the
+edge. Subtracting a single average over-credits actions taken
+from already-good states and under-credits actions that
+rescued bad ones.</p>
+<p>The critic&rsquo;s <code>V(s)</code> is <em>state-specific</em>. The advantage
+<code>G − V(s)</code> asks the sharper question: &ldquo;was this action better
+than what I expected <strong>from this particular state</strong>?&rdquo; That is a
+cleaner, better-directed learning signal — and, as the
+experiment below shows, it makes learning markedly faster and
+more reliable.</p>
+<hr />
+<h2>The algorithm</h2>
+<pre><code>A2C(episodes, γ, α, β):
+    initialise actor θ and critic w
+    for each episode:
+        run an episode with π(·; θ), recording (s_t, a_t, r_t)
+        for each t:  G_t = Σ_{k≥t} γ^{k−t} r_k        # returns
+        for each t:  A_t = G_t − V(s_t; w)            # advantage
+        actor  update:  θ ← θ + α Σ_t ∇θ log π(a_t|s_t) · A_t
+        critic update:  w ← w − β Σ_t ∇w ( V(s_t; w) − G_t )²
+    return θ, w
+</code></pre>
+<p>The advantage is treated as a fixed weight when updating the
+actor — the gradient flows through <code>log π</code>, not through the
+critic. Two updates, one shared trajectory. (For clarity the
+script uses full-episode Monte-Carlo returns; production A2C
+uses <em>n-step</em> returns — bootstrapping <code>V</code> after a few steps
+rather than waiting for the episode to end — and <strong>GAE</strong>
+generalises that further. The idea is identical; only the
+return estimator changes.)</p>
+<h3>A2C vs A3C</h3>
+<p>The algorithm was popularised in its <strong>asynchronous</strong> form,
+<strong>A3C</strong> (Mnih et al., 2016): many actor-learners run in parallel
+on separate copies of the environment, each computing gradients
+and updating a shared set of weights asynchronously. The
+parallelism decorrelates the data — playing the role that
+experience replay plays for DQN — so no replay buffer is needed.</p>
+<p><strong>A2C</strong> is the <strong>synchronous</strong> simplification: run the parallel
+workers, wait for all of them, average their gradients, apply
+one update. It turned out to be as effective as A3C and simpler,
+which is why it&rsquo;s the more common starting point today. The
+&ldquo;advantage actor-critic&rdquo; core — actor, critic, advantage — is
+identical; A2C and A3C differ only in how they gather data.</p>
+<hr />
+<h2>A worked example: A2C on CartPole</h2>
+<p>The companion script trains an actor (<code>4 → 64 → 2</code>) and a
+critic (<code>4 → 64 → 1</code>) together on CartPole, the same task as
+Parts 3 and 4.</p>
+<pre><code>DEMO 1 --- Advantage Actor-Critic learns CartPole
+  Actor : 4 -&gt; 64 -&gt; 2 (softmax)   pi(a | s)   -- what to do
+  Critic: 4 -&gt; 64 -&gt; 1 (value)     V(s)        -- how good a state is
+  Episodes: 500  gamma=0.99  lr=1e-2 (both)  trained together
+ 
+  Mean return by 50-episode block (max possible = 500):
+    episodes   1- 50 :  149.8  ############
+    episodes  51-100 :  287.9  #######################
+    episodes 101-150 :  417.8  ##################################
+    episodes 151-200 :  496.2  #########################################
+    episodes 201-250 :  495.5  #########################################
+    episodes 251-300 :  500.0  #########################################
+    episodes 301-350 :  498.8  #########################################
+    episodes 351-400 :  356.4  #############################
+    episodes 401-450 :  500.0  #########################################
+    episodes 451-500 :  500.0  #########################################
+</code></pre>
+<p>It climbs to a perfect 500 by episode 150 and holds — apart from
+one honest wobble around episode 380, after which it recovers
+and stays maxed. (Final mean return over the last 100 episodes:
+500.0.)</p>
+<h3>The headline: A2C vs REINFORCE</h3>
+<p>Is the critic actually pulling its weight? Run the <em>same</em> setup
+twice — identical network, identical learning rate — changing
+only the baseline. REINFORCE uses the constant mean; A2C uses
+the learned critic <code>V(s)</code>.</p>
+<pre><code>DEMO 2 --- A2C vs REINFORCE: faster and more reliable
+  Episodes to 'solve' (100-episode mean return &gt;= 475), 400 eps/seed:
+ 
+    seed 0:   A2C  @ 209         REINFORCE  not solved
+    seed 1:   A2C  @ 246         REINFORCE  @ 377
+    seed 2:   A2C  @ 224         REINFORCE  not solved
+    seed 3:   A2C  @ 196         REINFORCE  @ 323
+ 
+  A2C solved 4/4 seeds (avg 218 ep);  REINFORCE solved 2/4.
+  The critic's state-dependent baseline is a cleaner learning signal.
+</code></pre>
+<p>Across four seeds, A2C solved every one, in ~218 episodes on
+average. Plain REINFORCE — same architecture, only a constant
+baseline — solved just two of the four within the 400-episode
+budget, and more slowly when it did. The state-dependent critic
+turns a temperamental learner into a dependable one.</p>
+<p>(A note on honesty: the textbook reason for the critic is
+<em>variance reduction</em>. On CartPole, where every step earns the
+same <code>+1</code>, the raw variance gap is small — the return mostly
+reflects how far into the episode you are, not which state
+you&rsquo;re in. The benefit instead surfaces exactly where it
+matters in practice: speed and reliability of learning.)</p>
+<h3>The critic learns to predict return</h3>
+<p>What did the critic actually learn? Track its estimate of the
+<em>start</em> state&rsquo;s value across training:</p>
+<pre><code>DEMO 3 --- The critic learned to predict return
+  V(start state) over training -- it tracks the policy's rising value:
+    episode   0:   V(s0) =    0.1
+    episode 100:   V(s0) =   53.9
+    episode 200:   V(s0) =   98.3
+    episode 300:   V(s0) =  100.1
+    episode 400:   V(s0) =   75.5
+    episode 499:   V(s0) =   99.8
+ 
+  Final V(start) = 99.8  vs  the ~99 discounted return of a
+  full 500-step episode -- the critic predicts the return accurately.
+ 
+  Greedy rollouts (take argmax): [500, 500, 500]  -&gt; mean 500 / 500 steps
+</code></pre>
+<p>The critic starts clueless (<code>V ≈ 0</code>) and, as the actor improves,
+learns that the start state is worth almost 100 — which is
+exactly the discounted return of a 500-step episode,
+<code>(1 − 0.99^500) / 0.01 ≈ 99</code>. It even <em>tracks the wobble</em>: its
+estimate dips to 75 around episode 400 when the policy briefly
+degrades, then recovers to 99.8. The critic isn&rsquo;t guessing — it
+has learned to predict the actor&rsquo;s return.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>A2C runs two networks, so its costs are REINFORCE&rsquo;s plus a
+critic of the same order — a small constant factor, not a
+different complexity class.</p>
+<p><strong>Per episode</strong>: <code>O(T · (W_actor + W_critic))</code> — run <code>T</code> steps,
+then one gradient step each for the actor and the critic over
+the trajectory.</p>
+<p><strong>Memory</strong>: <code>O(W_actor + W_critic + T · d)</code> — two networks plus
+one trajectory. Like REINFORCE and unlike DQN, <strong>on-policy A2C
+keeps no replay buffer</strong>: each trajectory updates both networks
+once and is discarded. (A3C adds parallel workers — more
+compute, but decorrelated data and no replay.)</p>
+<p><strong>The trade-off it resolves</strong>: A2C keeps REINFORCE&rsquo;s ability to
+handle continuous, stochastic policies, while the critic
+restores much of the stability that pure policy gradients lack.
+It does not match DQN&rsquo;s sample efficiency — on-policy methods
+still can&rsquo;t replay old data — which is the gap that later
+algorithms like SAC close.</p>
+<hr />
+<h2>The bigger picture</h2>
+<p>Advantage Actor-Critic is not just another algorithm; it is the
+<strong>architecture</strong> almost all of modern deep RL is built on.</p>
+<ul>
+<li><strong>PPO</strong> (Proximal Policy Optimisation) is an actor-critic that
+  adds a clipped objective to stop the policy changing too fast
+  per update. It is the workhorse of continuous control — and
+  the algorithm behind most <strong>RLHF</strong> for language models.</li>
+<li><strong>DDPG, TD3, SAC</strong> are actor-critics for continuous action
+  spaces, where the critic learns <code>Q(s, a)</code> and the actor is
+  trained to maximise it.</li>
+<li><strong>AlphaGo / AlphaZero</strong> pair a policy network (actor) with a
+  value network (critic), guided by tree search.</li>
+</ul>
+<p>Once you see the actor-critic pattern — one network proposing
+actions, another judging them — you see it everywhere. The two
+branches that opened this track don&rsquo;t just coexist in A2C; their
+union is the foundation the field now stands on.</p>
+<hr />
+<h2>What comes next</h2>
+<p>This article closes the <strong>foundational Reinforcement Learning
+track</strong> — Q-Learning, SARSA, DQN, Policy Gradients, and now
+Advantage Actor-Critic: tabular methods, deep value methods, and
+both halves of the policy-gradient world, all built from
+scratch.</p>
+<p>The next section, <strong>Advanced Reinforcement Learning</strong>, begins
+with <strong>Proximal Policy Optimisation (PPO)</strong> — the actor-critic
+refinement that made policy-gradient methods stable and reliable
+enough to train everything from robot controllers to the
+aligned behaviour of large language models. Everything in this
+article is the scaffolding PPO is built on.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/08-reinforcement-learning/05-advantage-actor-critic/a2c.py"><strong>a2c.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python a2c.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in well under a minute. Every
+piece is from scratch: the CartPole dynamics, two MLPs (actor
+and critic) with hand-written backprop and Adam, and the
+advantage computation that couples them. The headline insight
+worth pinning to the wall: <strong>A2C is value-based and policy-based
+at once — a critic <code>V(s)</code> learns how good each state is, and the
+actor <code>π(a|s)</code> is trained by the advantage <code>G − V(s)</code> (&ldquo;better
+than expected from this state&rdquo;) rather than the raw return;
+swapping REINFORCE&rsquo;s one constant baseline for this learned,
+state-dependent one is the difference between solving CartPole
+2 times out of 4 and solving it 4 times out of 4</strong>.</p>
+<hr />
+<p><em>This is Part 5 of the Reinforcement Learning track in the Algorithms in Python series, and it closes the foundational RL section. The companion script <code>a2c.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/e9b0f432ae92">Part 4</a> covered Policy Gradient Methods (the actor) and <a href="https://medium.com/p/0102b41f786d">Part 3</a> covered DQN (value learning, the critic&rsquo;s lineage). The next section opens with Proximal Policy Optimisation, the actor-critic method behind modern RLHF.</em></p>
