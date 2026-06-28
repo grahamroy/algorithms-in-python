@@ -1,0 +1,276 @@
+<p>Every algorithm in this track so far has learned the same thing:
+<strong>values</strong>. Q-Learning, SARSA, and DQN all estimate <code>Q(s, a)</code> —
+how good each action is — and then act by taking the <code>argmax</code>.
+The policy is never represented directly; it falls out of the
+values as &ldquo;whatever the highest Q says.&rdquo;</p>
+<p>That indirection has costs. The <code>argmax</code> requires <em>enumerating</em>
+actions, so it cannot handle a continuous action space (a
+steering angle, a joint torque — infinitely many options). The
+resulting policy is <em>deterministic</em>, when sometimes the best
+behaviour is genuinely stochastic. And we optimise values as a
+proxy, hoping a good value estimate yields a good policy, rather
+than optimising the thing we actually care about.</p>
+<p><strong>Policy gradient methods</strong> throw out the indirection. Instead
+of learning values and deriving a policy, they <strong>parameterise
+the policy itself</strong> — <code>π(a | s; θ)</code>, a network that takes a
+state and outputs a probability for each action — and optimise
+<code>θ</code> directly by gradient ascent on expected return. No value
+table, no <code>argmax</code>, no proxy. This is the other great branch of
+reinforcement learning, and it is the one that leads, through
+actor-critic methods and PPO, to the RL behind today&rsquo;s language
+models.</p>
+<p>This article builds the foundational policy gradient algorithm,
+<strong>REINFORCE</strong> (Williams, 1992), entirely from scratch in NumPy —
+the policy network, the softmax, the policy-gradient backprop —
+and trains it on CartPole, the same task DQN balanced in Part 3.
+We will see it learn a <em>stochastic</em> policy, watch the single
+trick that makes it work (a <strong>baseline</strong>), and understand why,
+despite its simplicity, it underpins the most important RL
+methods in use today.</p>
+<hr />
+<h2>Two ways to be an agent</h2>
+<p>The split is worth drawing sharply, because it organises the
+whole field.</p>
+<p><strong>Value-based (Q-Learning, DQN).</strong> Learn <code>Q(s, a)</code>. Act by
+<code>argmax_a Q(s, a)</code>. The policy is implicit. Naturally
+off-policy (you can learn the greedy policy from any data),
+which is why replay works — but limited to discrete actions and
+a deterministic greedy policy.</p>
+<p><strong>Policy-based (REINFORCE, and what follows).</strong> Learn
+<code>π(a | s; θ)</code> directly. Act by <em>sampling</em> from it. The policy is
+explicit and, for discrete actions, is just a softmax over the
+network&rsquo;s outputs:</p>
+<pre><code>π(a | s; θ)  =  softmax( f(s; θ) )[a]
+</code></pre>
+<p>where <code>f(s; θ)</code> is a neural network producing one logit per
+action. For continuous actions, the network instead outputs the
+parameters of a distribution (say the mean and standard
+deviation of a Gaussian) and you sample from that — which is
+exactly why policy gradients handle continuous control and value
+methods can&rsquo;t.</p>
+<p>The question is how to train <code>θ</code> when the only feedback is a
+reward signal, not a labelled &ldquo;correct action.&rdquo;</p>
+<hr />
+<h2>The policy gradient: trial and error with a gradient</h2>
+<p>We want to maximise the expected return,</p>
+<pre><code>J(θ)  =  E[ R(τ) ]      over trajectories τ sampled by π(·; θ)
+</code></pre>
+<p>It looks impossible to differentiate — the return depends on the
+environment&rsquo;s dynamics, which we don&rsquo;t have in closed form. The
+<strong>policy gradient theorem</strong> (Sutton et al., 2000) gives a
+beautiful way around this. The gradient of <code>J</code> can be written as
+an <em>expectation we can sample</em>:</p>
+<pre><code>∇θ J(θ)  =  E[  Σ_t  ∇θ log π(a_t | s_t; θ) · G_t  ]
+</code></pre>
+<p>where <code>G_t</code> is the return (sum of discounted future rewards)
+following step <code>t</code>. Crucially, this involves only the gradient
+of our <em>own policy</em> — <code>∇θ log π</code> — and not the gradient of the
+environment. We can estimate the whole thing by just running
+episodes and averaging.</p>
+<p>The intuition is the entire algorithm in one sentence:</p>
+<blockquote><p><strong>Increase the log-probability of each action taken, in
+proportion to how good the return that followed it was.</strong></p></blockquote><p>Actions followed by high return get their probability pushed
+up; actions followed by low return get pushed down. Repeat, and
+the policy drifts toward whatever earns reward. It is trial and
+error — but with a gradient pointing the way.</p>
+<hr />
+<h2>REINFORCE, in full</h2>
+<p>REINFORCE is the direct Monte-Carlo implementation: run a whole
+episode, compute the actual returns, take one gradient step.</p>
+<pre><code>REINFORCE(episodes, α, γ):
+    initialise policy network θ
+    for each episode:
+        run an episode with π(·; θ), recording (s_t, a_t, r_t)
+        for each t:  G_t = Σ_{k≥t} γ^{k−t} r_k        # returns
+        update:  θ ← θ + α Σ_t ∇θ log π(a_t | s_t; θ) · G_t
+</code></pre>
+<p>In code, the update is remarkably close to supervised
+classification. The gradient of <code>log π</code> for a softmax policy is
+<code>(one_hot(a) − probs)</code>, so the gradient step is a
+<em>return-weighted</em> version of the cross-entropy gradient: treat
+the action taken as the &ldquo;label,&rdquo; and weight each example by its
+return <code>G_t</code>. A good episode pulls the policy toward the actions
+it took; a bad one pushes away. The companion script computes
+exactly this, by hand.</p>
+<p>There is no replay buffer and no target network. REINFORCE is
+<strong>on-policy</strong>: each trajectory is generated by the current
+policy, used for one update, and thrown away. That simplicity is
+a virtue and, as we&rsquo;ll see, a weakness.</p>
+<hr />
+<h2>The problem that nearly kills it: variance</h2>
+<p>The policy gradient is <em>unbiased</em> but <em>high-variance</em>. The
+return <code>G_t</code> of a single episode is a noisy estimate — the same
+policy can earn 500 one episode and 30 the next, just from
+randomness in the starts and the sampling. Multiply a noisy
+return into every gradient, and the updates are noisy enough to
+drown out the signal.</p>
+<p>The standard fix is a <strong>baseline</strong>. Subtract a reference value
+<code>b</code> from every return before weighting the gradient:</p>
+<pre><code>∇θ J(θ)  =  E[  Σ_t  ∇θ log π(a_t | s_t; θ) · (G_t − b)  ]
+</code></pre>
+<p>Remarkably, this leaves the gradient <strong>unbiased</strong> for any <code>b</code>
+that doesn&rsquo;t depend on the action — but choosing <code>b</code> to be the
+average return dramatically <em>cuts the variance</em>. The quantity
+<code>(G_t − b)</code> is called the <strong>advantage</strong>: how much better than
+the baseline this action did. The shift from &ldquo;return&rdquo; to
+&ldquo;better-than-average&rdquo; is the difference between a signal that
+teaches and one that doesn&rsquo;t, as the experiment below shows
+starkly.</p>
+<hr />
+<h2>A worked example: REINFORCE on CartPole</h2>
+<p>The companion script trains a policy network (<code>4 → 128 → 2</code>,
+softmax over the two actions) on CartPole — same task, same
+environment as the DQN article — using pure Monte-Carlo
+REINFORCE with one update per episode.</p>
+<pre><code>DEMO 1 --- REINFORCE learns CartPole (a stochastic policy)
+  Policy: 4 -&gt; 128 -&gt; 2, softmax over actions  -&gt;  pi(a | s)
+  Episodes: 800  gamma=0.99  lr=1e-2  Monte-Carlo, one update/episode
+ 
+  Mean return by 80-episode block (max possible = 500):
+    episodes   1- 80 :  246.5  ####################
+    episodes  81-160 :  379.4  ###############################
+    episodes 161-240 :  481.7  ########################################
+    episodes 241-320 :  468.5  #######################################
+    episodes 321-400 :  469.7  #######################################
+    episodes 401-480 :  477.3  #######################################
+    episodes 481-560 :  489.2  ########################################
+    episodes 561-640 :  495.4  #########################################
+    episodes 641-720 :  499.1  #########################################
+    episodes 721-800 :  487.5  ########################################
+ 
+  Final mean return (last 100 episodes): 490.0
+</code></pre>
+<p>The first few episodes sit near the random return of ~20. But
+REINFORCE crosses the classic &ldquo;solved&rdquo; threshold of 195 by
+<strong>episode 25</strong>, and the first 80-episode block already averages
+246 as it rockets up. It plateaus near 490 — close to the 500
+cap — and holds. On this task it actually learns <em>faster</em> than
+the DQN of Part 3, because the policy (&ldquo;push the way the pole is
+falling&rdquo;) is simple to represent directly, even though the
+underlying gradient is far noisier.</p>
+<h3>The headline experiment: remove the baseline</h3>
+<p>Run the <em>exact same</em> REINFORCE and change one thing: don&rsquo;t
+subtract the mean return. (Both versions normalise the returns&rsquo;
+scale, so the learning rate is comparable — the only difference
+is the baseline subtraction.)</p>
+<pre><code>DEMO 2 --- Why a baseline matters (variance reduction)
+  The SAME REINFORCE; the only change is whether we subtract the
+  mean return (the baseline) before weighting the gradient.
+ 
+  With baseline    final mean return:  490.0
+  Without baseline final mean return:    9.4
+ 
+  The baseline lifts the final return by 480.6. Without it every
+  return is positive, so every action taken is reinforced and the policy
+  can't tell good from bad. The baseline turns &quot;return&quot; into &quot;better or
+  worse than average&quot; -- the signal that actually teaches the policy.
+</code></pre>
+<p>This is dramatic — and instructive. In CartPole every reward is
+<code>+1</code>, so every return is <em>positive</em>. Without a baseline, every
+action ever taken gets its probability pushed <strong>up</strong>; the policy
+has no way to distinguish the good actions from the merely
+survived-a-bit ones, and it collapses to a degenerate policy
+worse than random (9.4). Subtract the average, and suddenly
+below-average actions get a <em>negative</em> advantage and are pushed
+down. The baseline isn&rsquo;t a minor tweak; it is what makes policy
+gradients work at all.</p>
+<h3>The policy is a distribution</h3>
+<p>Finally, the defining contrast with value-based methods. DQN
+outputs Q-values and takes an <code>argmax</code> — one action, always.
+REINFORCE outputs a <em>probability distribution</em>:</p>
+<pre><code>DEMO 3 --- The learned policy is a DISTRIBUTION, not an argmax
+  pi(a | s) at a few visited states (push-left, push-right):
+    state 0:  left 0.00   right 1.00
+    state 1:  left 0.01   right 0.99
+    state 2:  left 0.18   right 0.82
+    state 3:  left 0.87   right 0.13
+    state 4:  left 0.32   right 0.68
+ 
+  Greedy rollouts (take argmax): [500, 500, 500]  -&gt; mean 500 / 500 steps
+</code></pre>
+<p>Where the pole is clearly falling one way, the policy is nearly
+certain (0.00 / 1.00). Where the state is ambiguous, it hedges
+(0.32 / 0.68). It has learned a <em>graded</em> strategy, not a lookup
+table — and taking the greedy action from it balances the pole
+for the full 500 steps, every time.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>REINFORCE&rsquo;s cost profile is lighter than DQN&rsquo;s in memory but
+heavier in samples.</p>
+<p><strong>Per episode</strong>: <code>O(T · W)</code> — run <code>T</code> steps (a forward pass each
+to sample an action) and take one gradient step over the
+trajectory, where <code>W</code> is the number of network weights.</p>
+<p><strong>Memory</strong>: <code>O(W + T · d)</code> — the network plus a <em>single</em>
+trajectory of <code>T</code> transitions. There is <strong>no replay buffer</strong>:
+because REINFORCE is on-policy, each trajectory is used once and
+discarded. Memory is small — but so is data reuse.</p>
+<p><strong>Sample efficiency</strong>: poor, and this is the central trade-off.
+DQN replays each transition many times; REINFORCE sees each once.
+On-policy learning cannot reuse old data, because the data must
+come from the <em>current</em> policy. This is why policy gradient
+methods are often hungry for environment interaction.</p>
+<p><strong>Variance</strong>: high, mitigated but not eliminated by the
+baseline. The Monte-Carlo return waits until the episode ends
+and credits <em>every</em> action with the <em>whole</em> remaining return —
+a coarse assignment that the next article sharpens.</p>
+<hr />
+<h2>When to reach for policy gradients</h2>
+<p><strong>Use policy gradients when:</strong></p>
+<ul>
+<li><strong>Actions are continuous.</strong> This is the decisive reason. A
+  policy network can output the mean of a Gaussian over a
+  continuous action; a Q-function&rsquo;s <code>argmax</code> cannot search a
+  continuum. Robotics and control live here.</li>
+<li><strong>You want a stochastic policy</strong> — for exploration, for games
+  where unpredictability matters, or where the optimal behaviour
+  is genuinely mixed.</li>
+<li><strong>You want to optimise the policy directly</strong>, including with
+  constraints, which is what the modern variants (TRPO, PPO) are
+  built to do safely.</li>
+</ul>
+<p><strong>Prefer value-based methods when</strong> actions are discrete and few,
+and sample efficiency matters — DQN&rsquo;s replay makes far better use
+of expensive environment steps.</p>
+<p><strong>The lineage.</strong> REINFORCE is the root. Add a learned value
+function as the baseline and you get <strong>actor-critic</strong> (Part 5).
+Constrain the size of each policy update and you get <strong>TRPO</strong>
+and then <strong>PPO</strong> (Schulman et al., 2017) — and PPO is the
+algorithm behind most reinforcement learning from human feedback
+(RLHF) used to align large language models. The noisy little
+gradient you just built is the direct ancestor of how today&rsquo;s
+models are tuned.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 5 is <strong>Advantage Actor-Critic (A2C / A3C)</strong> — the synthesis
+of this article and the value-based ones. REINFORCE&rsquo;s weakness is
+the high-variance Monte-Carlo return and its crude baseline.
+Actor-critic replaces that baseline with a <em>learned value
+function</em> — a <strong>critic</strong> that estimates how good each state is —
+and uses it to compute a low-variance <strong>advantage</strong> for the
+<strong>actor</strong> (the policy). It is value-based and policy-based at
+once: the critic stabilises the actor, and the actor handles the
+continuous, stochastic policies the critic alone never could. It
+is where the two branches of this track finally meet.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/08-reinforcement-learning/04-policy-gradient-methods/reinforce.py"><strong>reinforce.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python reinforce.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in well under a minute. Every
+piece is from scratch: the CartPole dynamics, a policy network
+with a <code>tanh</code> hidden layer and hand-written backprop, an Adam
+optimiser, and the policy-gradient update — which turns out to be
+a return-weighted version of the softmax cross-entropy gradient.
+The headline insight worth pinning to the wall: <strong>policy gradient
+methods skip the value table and optimise the policy <code>π(a|s; θ)</code>
+directly, pushing up the probability of actions that led to high
+return; the one trick that makes this work is subtracting a
+baseline so the signal becomes &ldquo;better or worse than average&rdquo;
+(the advantage) rather than a raw, all-positive return — which on
+CartPole is the difference between 490 and 9</strong>.</p>
+<hr />
+<p><em>This is Part 4 of the Reinforcement Learning track in the Algorithms in Python series. The companion script <code>reinforce.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/0102b41f786d">Part 3</a> covered Deep Q-Networks, the value-based method this one is contrasted against. Part 5 will look at Advantage Actor-Critic, which combines a learned value function (critic) with the policy gradient (actor).</em></p>
