@@ -103,7 +103,7 @@ clear explanations and Python implementations.
 ### 09 — Advanced Reinforcement Learning
 | # | Algorithm | Status |
 |---|-----------|--------|
-| 1 | Proximal Policy Optimisation (PPO) | ⬜ |
+| 1 | Proximal Policy Optimisation (PPO) | ✅ |
 | 2 | Trust Region Policy Optimisation (TRPO) | ⬜ |
 | 3 | Deep Deterministic Policy Gradient (DDPG) | ⬜ |
 | 4 | Twin Delayed DDPG (TD3) | ⬜ |

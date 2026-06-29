@@ -1,0 +1,241 @@
+<p>The foundational track of this series ended with <strong>Advantage
+Actor-Critic</strong> (A2C): an actor <code>π(a | s)</code> proposing actions, a
+critic <code>V(s)</code> judging them, the advantage <code>G − V(s)</code> training
+the actor. It worked — but it left two problems unsolved, and
+both are about the <em>size of the step you take</em>.</p>
+<p>First, <strong>a single update can be too big</strong>. Policy gradients have
+no built-in limit on how far they move the policy. One unlucky
+batch with a large advantage can shove the policy somewhere
+terrible, and — because the next batch of data is collected by
+that now-worse policy — it may never recover. We saw exactly
+this in Part 4: REINFORCE climbing to 450 and then <em>collapsing</em>.</p>
+<p>Second, <strong>on-policy data is used once and thrown away</strong>. A2C and
+REINFORCE collect a batch, take one gradient step, and discard
+it. They have to, because after one step the policy has changed
+and the old data no longer reflects it. That makes them
+sample-hungry.</p>
+<p><strong>Proximal Policy Optimisation (PPO)</strong> (Schulman et al., 2017)
+solves both with a single idea: a <strong>clipped objective</strong> that
+refuses to let the policy move too far from where it started
+each update. Keeping the new policy <em>proximal</em> to the old one
+caps the step size (fixing problem one) — and, because the
+policy is now guaranteed to stay close to the data-collecting
+policy, you can safely take <strong>many gradient steps on the same
+batch</strong> (fixing problem two). PPO is the algorithm that made
+policy gradients dependable enough to become the default for
+continuous control and the backbone of <strong>RLHF</strong> for language
+models.</p>
+<p>This article builds PPO from scratch in NumPy — on top of the
+A2C actor-critic — and shows the clip doing its job: turning a
+collapse-prone learner into a stable, sample-efficient one.</p>
+<hr />
+<h2>The idea: stay in a trust region</h2>
+<p>The principle behind PPO is older than PPO. <strong>TRPO</strong> (Trust
+Region Policy Optimisation, Schulman et al., 2015) made it
+precise: don&rsquo;t just maximise expected return — maximise it
+<em>subject to a constraint</em> that the new policy stays within a
+&ldquo;trust region&rdquo; of the old one, measured by KL divergence. Inside
+that region, the improvement estimate is trustworthy; outside it,
+all bets are off.</p>
+<p>TRPO enforces this with a hard constraint and second-order
+optimisation — powerful but complicated. PPO&rsquo;s insight is that
+you can get almost all the benefit with a <strong>first-order
+approximation</strong>: instead of a hard KL constraint, just <em>clip the
+objective</em> so there&rsquo;s no incentive to leave the region. Same
+goal — bounded, trustworthy steps — with plain gradient descent.</p>
+<hr />
+<h2>The probability ratio</h2>
+<p>Everything in PPO is expressed through one quantity, the
+<strong>probability ratio</strong> between the new policy and the old one for
+the action that was actually taken:</p>
+<pre><code>r(θ)  =  π_θ(a | s)  /  π_θ_old(a | s)
+</code></pre>
+<p><code>r = 1</code> means the new policy assigns the action exactly the same
+probability as the old one — no change. <code>r = 1.3</code> means the new
+policy is 30% more likely to take it; <code>r = 0.7</code>, 30% less. The
+ratio measures <em>how far the policy has moved</em> on this action, and
+it is the lever PPO controls.</p>
+<p>The plain policy-gradient objective, written with the ratio, is
+<code>r(θ) · A</code> — push <code>r</code> up when the advantage <code>A</code> is positive (the
+action was good), down when it&rsquo;s negative. The problem is there&rsquo;s
+nothing stopping <code>r</code> from shooting to 5 or 0.05 in one update.</p>
+<hr />
+<h2>The clipped objective</h2>
+<p>PPO&rsquo;s objective clips the ratio into a band around 1:</p>
+<pre><code>L(θ)  =  E[  min( r(θ)·A,  clip(r(θ), 1−ε, 1+ε)·A )  ]
+</code></pre>
+<p>with <code>ε</code> typically 0.2 — a band of <code>[0.8, 1.2]</code>. Two things are
+happening, and the <code>min</code> is the clever part.</p>
+<p>Take a <strong>good action</strong> (<code>A &gt; 0</code>). We want to raise <code>r</code>. The first
+term <code>r·A</code> keeps rewarding bigger <code>r</code> forever. The second term
+caps <code>r</code> at <code>1 + ε</code>: beyond that, <code>clip(r)·A</code> is flat. The <code>min</code>
+takes the smaller of the two, so once <code>r</code> exceeds <code>1 + ε</code> the
+objective stops increasing — <strong>no gradient, no incentive to push
+further</strong>. The policy is allowed to become <em>somewhat</em> more likely
+to take the good action, but not arbitrarily so, in one update.</p>
+<p>For a <strong>bad action</strong> (<code>A &lt; 0</code>), the logic mirrors: the clip stops
+the policy from driving the action&rsquo;s probability down past
+<code>1 − ε</code> in a single update. Either way, the <code>min</code> makes the
+objective a <em>pessimistic lower bound</em> — it never rewards moving
+the ratio outside the trust band. That is the whole mechanism.</p>
+<h3>Why this unlocks data reuse</h3>
+<p>Here&rsquo;s the payoff that&rsquo;s easy to miss. Because the clip
+guarantees the policy can&rsquo;t wander far from <code>π_old</code> in one
+update, the rollout <code>π_old</code> collected stays <em>approximately valid</em>
+for several gradient steps. So PPO does something on-policy
+methods can&rsquo;t: it takes <strong>multiple epochs</strong> of minibatch updates
+on the <em>same</em> rollout before collecting fresh data. The clip is
+what makes that reuse safe — without it, epoch after epoch would
+drag the policy further and further from the data until the
+estimate is meaningless.</p>
+<hr />
+<h2>The algorithm</h2>
+<pre><code>PPO(iterations, epochs, ε, γ, λ):
+    initialise actor θ and critic w
+    for each iteration:
+        run π_θ for N steps; record states, actions, rewards
+        record old log-probs  log π_θ_old(a|s)
+        compute advantages A with GAE(γ, λ) using the critic
+        for several EPOCHS, over minibatches:
+            r = exp( log π_θ(a|s) − log π_θ_old(a|s) )
+            actor  loss = − min( r·A, clip(r, 1−ε, 1+ε)·A )
+            critic loss = ( V(s) − return )²
+            gradient-step both
+    return θ, w
+</code></pre>
+<p>The advantages use <strong>GAE</strong> (Generalised Advantage Estimation,
+Schulman et al., 2016) — an exponentially-weighted average of
+n-step advantages that trades bias against variance with a
+parameter <code>λ</code>; the companion script implements it directly. The
+old log-probs are snapshotted before the epochs begin, so the
+ratio <code>r</code> is always measured against the policy that <em>collected</em>
+the data.</p>
+<hr />
+<h2>A worked example: PPO on CartPole</h2>
+<p>The companion script trains an actor (<code>4 → 64 → 2</code>) and critic
+(<code>4 → 64 → 1</code>) on CartPole — the same environment as the last
+three articles — collecting 1024-step rollouts and doing 10
+epochs of clipped updates on each.</p>
+<pre><code>DEMO 1 --- PPO learns CartPole (clipped, multi-epoch)
+  Actor : 4 -&gt; 64 -&gt; 2 (softmax)     Critic: 4 -&gt; 64 -&gt; 1 (value)
+  rollout=1024 steps  epochs=10  minibatch=64  clip=0.2  gamma=0.99  lambda=0.95
+ 
+  Moving-average return vs environment steps (max possible = 500):
+      1024 steps :   33.0  ##
+      5120 steps :  105.9  ########
+      9216 steps :  217.2  ##################
+     13312 steps :  351.1  #############################
+     17408 steps :  445.8  #####################################
+     21504 steps :  474.6  #######################################
+     25600 steps :  419.1  ##################################
+     29696 steps :  419.1  ##################################
+     33792 steps :  459.6  ######################################
+     37888 steps :  482.6  ########################################
+</code></pre>
+<p>PPO climbs steadily to a near-perfect return in under 40,000
+environment steps, with only a shallow wobble around step 25k
+that it recovers from — no collapse. Note the x-axis: this is
+plotted against <em>environment steps</em>, the currency that matters
+when interaction is expensive.</p>
+<h3>The headline: what the clip is for</h3>
+<p>Run the <em>same</em> PPO — same rollouts, same 10 epochs — and simply
+remove the clip, optimising the raw <code>r · A</code> instead.</p>
+<pre><code>DEMO 2 --- The clip is what makes multi-epoch reuse safe
+  With clip   : rises to 483 and holds it           (stable)
+  Without clip: peaks at 407, then collapses to 258  (unstable)
+</code></pre>
+<p>Without the clip, the ten epochs of reuse are exactly the
+problem. Each epoch drags the policy further from the rollout
+that justified the update; by the time it has cycled the data ten
+times, the policy has overshot. It climbs promisingly to 407 —
+then collapses and thrashes, ending at 258. With the clip, every
+update is held proximal to the old policy, the reuse stays valid,
+and the curve rises to 483 and stays there. The clip isn&rsquo;t a
+tweak; it is the thing that makes multi-epoch PPO work at all.</p>
+<h3>The payoff: sample efficiency</h3>
+<p>Why bother reusing data? Because environment interaction is the
+expensive part. The more epochs PPO squeezes from each rollout,
+the fewer rollouts — fewer environment steps — it needs.</p>
+<pre><code>DEMO 3 --- More epochs per rollout = fewer env steps to solve
+     1 epoch(s)/rollout : not solved in budget
+     5 epoch(s)/rollout : solved in 30720 env steps
+    10 epoch(s)/rollout : solved in 22528 env steps
+</code></pre>
+<p>With a single epoch per rollout — essentially the on-policy A2C
+regime, using each batch once — PPO doesn&rsquo;t even solve CartPole
+within the budget. Five epochs solve it in ~31k steps; ten, in
+~23k. Reusing the data that the clip makes <em>safe</em> to reuse is
+precisely where the sample efficiency comes from. (The trained
+policy balances the pole for the full 500 steps on every greedy
+rollout.)</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>PPO&rsquo;s cost is A2C&rsquo;s, multiplied by the epochs-and-minibatches it
+runs over each rollout.</p>
+<p><strong>Per iteration</strong>: <code>O(N · W)</code> to collect a rollout of <code>N</code> steps,
+then <code>O(epochs · N · W)</code> for the updates — the reuse factor
+<code>epochs</code> is the multiplier that buys sample efficiency at the
+cost of compute.</p>
+<p><strong>Memory</strong>: <code>O(W + N · d)</code> — the two networks plus one rollout of
+<code>N</code> transitions. Like A2C and unlike DQN, there&rsquo;s <strong>no replay
+buffer</strong>; the &ldquo;old policy&rdquo; snapshot is just the log-probs stored
+with the rollout.</p>
+<p><strong>The trade-off PPO strikes</strong>: it spends <em>more compute per
+environment step</em> (multiple epochs) to spend <em>fewer environment
+steps overall</em>. When the simulator is the bottleneck — robotics,
+expensive rollouts, an LLM generating completions — that is
+exactly the right trade.</p>
+<hr />
+<h2>When to use PPO — and why it&rsquo;s everywhere</h2>
+<p><strong>PPO is the sensible default</strong> for policy-gradient RL. It is
+robust to hyperparameters, simple to implement (one clip on top
+of actor-critic), works for discrete <em>and</em> continuous actions,
+and rarely melts down. That combination is why it dominates:</p>
+<ul>
+<li><strong>Continuous control</strong> — robotics, locomotion, simulated
+  physics — is overwhelmingly PPO.</li>
+<li><strong>RLHF for language models</strong> uses PPO as the optimiser: the
+  policy is the LLM, the reward comes from a learned preference
+  model, and the clip keeps the model from drifting too far from
+  its starting point in any one update (InstructGPT, Ouyang et
+  al., 2022).</li>
+<li><strong>Game-playing agents</strong> (OpenAI Five for Dota 2, among others)
+  scaled PPO to enormous batch sizes.</li>
+</ul>
+<p><strong>Prefer something else when</strong> sample efficiency is paramount and
+you can tolerate complexity — off-policy actor-critics like
+<strong>SAC</strong> (later in this section) reuse a full replay buffer and
+squeeze more from each step. PPO trades some of that efficiency
+for stability and simplicity, and usually it&rsquo;s the right trade.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 2 of this Advanced track goes back to the method PPO
+simplifies: <strong>Trust Region Policy Optimisation (TRPO)</strong>. PPO
+approximates a trust region with a clip; TRPO enforces one
+<em>exactly</em>, with a KL-divergence constraint and the second-order
+machinery to solve it. Seeing the rigorous version makes clear
+just how much PPO gives up — and how little it loses — by
+replacing that constraint with one <code>min</code> and a clip.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/09-advanced-reinforcement-learning/01-proximal-policy-optimisation/ppo.py"><strong>ppo.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python ppo.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in well under a minute. Every
+piece is from scratch: the CartPole dynamics, the actor and
+critic MLPs with hand-written backprop and Adam, GAE for the
+advantages, and the clipped surrogate objective with its
+multi-epoch minibatch updates. The headline insight worth
+pinning to the wall: <strong>PPO controls the probability ratio
+<code>r = π_new/π_old</code> and clips the objective so there&rsquo;s no incentive
+to push <code>r</code> outside <code>[1−ε, 1+ε]</code>; keeping each update proximal to
+the old policy caps the step size <em>and</em> makes it safe to reuse
+each rollout for many epochs — which on CartPole is the
+difference between a stable climb to 483 and a collapse from 407
+to 258</strong>.</p>
+<hr />
+<p><em>This is Part 1 of the Advanced Reinforcement Learning track in the Algorithms in Python series, and it opens where the foundational track left off. The companion script <code>ppo.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/745178b96a83">The previous article</a> covered Advantage Actor-Critic, the foundation PPO is built on. Part 2 will look at TRPO, the trust-region method PPO approximates.</em></p>
