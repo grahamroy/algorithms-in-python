@@ -1,0 +1,248 @@
+<p>Part 1 of this Advanced track built <strong>PPO</strong>, and described its
+clip as an <em>approximation</em> of a trust region. This article builds
+the thing being approximated: <strong>Trust Region Policy Optimisation
+(TRPO)</strong> (Schulman et al., 2015), the algorithm that made the
+trust-region idea rigorous in the first place.</p>
+<p>The motivation is the one we&rsquo;ve returned to all through the
+policy-gradient articles: <strong>a policy update that&rsquo;s too big can
+wreck the policy</strong>, and because the next batch of data comes from
+the damaged policy, it may never recover. PPO handles this with a
+cheap clip. TRPO handles it <em>exactly</em> — it solves a constrained
+optimisation problem at every step:</p>
+<pre><code>maximise   L(θ)        the surrogate (expected advantage)
+subject to KL(π_old, π_θ)  ≤  δ      stay in the trust region
+</code></pre>
+<p>The constraint says: improve the policy as much as you can, <em>but
+do not move more than δ away</em> (in average KL divergence) from the
+policy that collected the data. Inside that region the
+improvement estimate is trustworthy; the famous result behind
+TRPO is that optimising the surrogate within it gives a
+<strong>monotonic improvement guarantee</strong> — each update provably does
+not make the true objective worse.</p>
+<p>That rigour comes at a price: TRPO needs the <strong>natural gradient</strong>,
+computed with <strong>conjugate gradient</strong> and <strong>Fisher-vector
+products</strong>, plus a <strong>line search</strong>. This article builds every
+piece from scratch in NumPy — no autograd — and shows the trust
+region being enforced to the letter on CartPole.</p>
+<hr />
+<h2>The surrogate and the trust region</h2>
+<p>TRPO maximises the same surrogate objective PPO does — the
+importance-weighted advantage —</p>
+<pre><code>L(θ)  =  E[ ( π_θ(a|s) / π_old(a|s) ) · A ]
+</code></pre>
+<p>but instead of clipping it, it caps the <em>step</em> directly with a
+hard KL constraint, <code>KL(π_old, π_θ) ≤ δ</code>. Why KL and not, say,
+the Euclidean distance between parameter vectors? Because the
+same change in parameters can mean a tiny or an enormous change
+in the <em>policy</em>, depending on where you are. KL measures distance
+in the space of <strong>distributions</strong> — exactly what we care about.
+A trust region of fixed KL radius is a trust region of fixed
+<em>behavioural</em> change.</p>
+<p>The payoff is the monotonic-improvement theorem (building on
+Kakade &amp; Langford&rsquo;s 2002 conservative policy iteration): within a
+KL trust region, the surrogate <code>L</code> is a reliable lower bound on
+the true performance, so improving <code>L</code> improves the policy. TRPO
+turns that theorem into an algorithm.</p>
+<hr />
+<h2>The natural gradient</h2>
+<p>To maximise <code>L</code> subject to the KL constraint, TRPO uses the
+<strong>natural gradient</strong> rather than the ordinary one. The ordinary
+gradient <code>g = ∇L</code> points in the direction of steepest ascent <em>in
+parameter space</em> — but parameter space is the wrong geometry. The
+natural gradient corrects for it using the <strong>Fisher information
+matrix</strong> <code>F</code>, the local curvature of the KL divergence:</p>
+<pre><code>natural gradient  =  F⁻¹ g
+</code></pre>
+<p><code>F</code> re-weights the step so that &ldquo;steepest&rdquo; is measured in
+<em>distribution</em> space (KL), the same space the trust region lives
+in. This is the direction that gets the most policy improvement
+per unit of KL — precisely what a trust-region method wants.</p>
+<p>The obstacle: <code>F</code> is a <code>P × P</code> matrix for <code>P</code> parameters.
+Forming and inverting it is hopeless for any real network. TRPO&rsquo;s
+practical trick is to never build it.</p>
+<hr />
+<h2>Solving it without ever forming F</h2>
+<p>Two classic numerical methods make it tractable.</p>
+<p><strong>Conjugate gradient</strong> solves the linear system <code>F x = g</code> for the
+natural gradient <code>x = F⁻¹ g</code> <em>iteratively</em>. Its one requirement
+is a way to compute the matrix-vector product <code>F v</code> for an
+arbitrary vector <code>v</code> — it never needs <code>F</code> itself. A handful of
+iterations (10 here) get a good solution.</p>
+<p><strong>Fisher-vector products</strong> supply that <code>F v</code>. For a softmax
+policy, the Fisher in logit-space is <code>diag(p) − p pᵀ</code>, so</p>
+<pre><code>F v  =  Jᵀ ( diag(p) − p pᵀ ) J v
+</code></pre>
+<p>where <code>J</code> is the Jacobian of the network&rsquo;s logits with respect to
+its parameters. The companion script computes <code>J v</code> — the
+directional derivative of the logits — with a <strong>finite
+difference</strong> (one extra forward pass at <code>θ + ε v</code>), applies the
+analytic logit-space Fisher, then does one backward pass for the
+<code>Jᵀ</code> — a Fisher-vector product with no autograd at all.</p>
+<p>Once conjugate gradient returns the direction <code>x</code>, TRPO scales it
+to the edge of the trust region. Under a quadratic approximation
+of the KL, the step that hits <code>KL = δ</code> is</p>
+<pre><code>step  =  sqrt( 2δ / (xᵀ F x) ) · x
+</code></pre>
+<hr />
+<h2>The line search</h2>
+<p>That step size is exact only under the <em>approximation</em> that KL is
+quadratic. It usually isn&rsquo;t, quite. So TRPO finishes with a
+<strong>backtracking line search</strong>: try the full step, and if the
+<em>actual</em> KL exceeds δ or the surrogate didn&rsquo;t really improve,
+halve the step and try again. The first step that genuinely stays
+in the region and improves the surrogate is accepted; if none
+does, the update is rejected and the policy stays put. This is
+what turns &ldquo;approximately in the trust region&rdquo; into &ldquo;provably in
+the trust region.&rdquo;</p>
+<hr />
+<h2>The algorithm</h2>
+<pre><code>TRPO(iterations, δ):
+    for each iteration:
+        run π_old for N steps; compute advantages A with GAE
+        g = ∇θ L(θ)                       surrogate gradient
+        x = ConjugateGradient(F·_, g)     natural gradient, F⁻¹g
+        step = sqrt(2δ / (xᵀ F x)) · x    scale to the KL edge
+        line search: largest α in {1, ½, ¼, …} with
+            KL(π_old, π_{θ+α·step}) ≤ δ  and  L improved
+        θ ← θ + α · step
+        fit the critic to the returns (for GAE)
+</code></pre>
+<p>Every <code>F·_</code> inside conjugate gradient is one Fisher-vector
+product. The critic, as in A2C and PPO, exists only to compute
+advantages and is trained by ordinary regression.</p>
+<hr />
+<h2>A worked example: TRPO on CartPole</h2>
+<p>The companion script trains an actor (<code>4 → 64 → 2</code>) and critic
+(<code>4 → 64 → 1</code>) with full TRPO — conjugate gradient, Fisher-vector
+products, and the line search — on CartPole.</p>
+<pre><code>DEMO 1 --- TRPO learns CartPole (exact trust-region steps)
+  rollout=2048 steps  max_kl(delta)=0.01  cg_iters=10  gamma=0.99  lambda=0.95
+ 
+  Moving-average return vs environment steps (max possible = 500):
+       2048 steps :   35.2  ##
+      14336 steps :  187.8  ###############
+      20480 steps :  344.6  ############################
+      26624 steps :  467.2  ######################################
+      45056 steps :  498.2  #########################################
+      63488 steps :  500.0  #########################################
+      81920 steps :  500.0  #########################################
+     100352 steps :  500.0  #########################################
+ 
+  Final moving-average return: 500.0
+</code></pre>
+<p>TRPO climbs to a perfect, <em>stable</em> 500 and holds it — no collapse,
+no thrashing. The monotonic-improvement guarantee shows up as a
+visibly smooth curve: each trust-region step is conservative
+enough that the policy essentially never goes backwards.</p>
+<h3>The headline: the trust region is real</h3>
+<p>The defining property of TRPO is that the constraint is <em>actually
+enforced</em>. The script records the KL divergence of every accepted
+update:</p>
+<pre><code>DEMO 2 --- The trust region is enforced exactly
+  The KL of each accepted step, over training:
+    iters  1- 5:  0.0086  0.0082  0.0078  0.0071  0.0068
+    iters  6-10:  0.0071  0.0074  0.0060  0.0057  0.0069
+    iters 11-15:  0.0065  0.0039  0.0084  0.0073  0.0080
+    ...
+    iters 46-50:  0.0079  0.0052  0.0058  0.0075  0.0078
+ 
+  Max KL over all updates: 0.0094  (delta = 0.0100)
+  -&gt; every step stayed inside the trust region.
+</code></pre>
+<p>Across all 50 updates, the KL never exceeds δ = 0.01 — the
+maximum is 0.0094. Each step moves the policy as far as the trust
+region allows and <em>not one step further</em>. This is the guarantee
+PPO&rsquo;s clip only gestures at: PPO <em>discourages</em> large moves,
+TRPO <em>forbids</em> them.</p>
+<h3>The trust-region size is a dial</h3>
+<p>How big should δ be? It directly trades learning speed against
+stability:</p>
+<pre><code>DEMO 3 --- The trust-region size delta is a speed/stability dial
+  delta    env steps to solve     final return    max KL
+    0.001   71680                    475        0.0009
+    0.01    28672                    500        0.0092
+    0.05    36864                    480        0.0497
+    0.2     51200                    428        0.1836
+</code></pre>
+<p>A tiny δ (0.001) is safe but slow — it crawls to a solution in
+72k steps. A large δ (0.2) takes big, risky steps and ends up
+<em>worse</em> (428), because the quadratic approximation behind the
+step breaks down when you move too far. δ = 0.01 is the sweet
+spot: fastest to solve and a perfect final score. And notice the
+max-KL column tracks δ exactly — the trust region is honoured at
+whatever radius you set. (The trained policy balances the pole
+for the full 500 steps on every greedy rollout.)</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>TRPO&rsquo;s per-update cost is dominated by the conjugate-gradient
+solve, which is what buys the exact trust region.</p>
+<p><strong>Per iteration</strong>: <code>O(N · W)</code> to collect a rollout of <code>N</code> steps,
+then the natural-gradient solve: conjugate gradient runs
+<code>cg_iters</code> Fisher-vector products, each one a forward and a
+backward pass over the batch — <code>O(cg_iters · N · W)</code>. The line
+search adds a few more forward passes.</p>
+<p><strong>Memory</strong>: <code>O(W + N · d)</code> — the networks plus one rollout. Like
+PPO, <strong>no replay buffer</strong>. Conjugate gradient needs only a few
+vectors of size <code>P</code> (the parameter count), never the <code>P × P</code>
+Fisher matrix.</p>
+<p><strong>The trade-off versus PPO</strong>: TRPO does strictly more work per
+update — the CG solve and line search are real overhead — to get
+an exact constraint and a monotonic guarantee. PPO throws away
+the guarantee, replaces all of that with one clip, and is far
+simpler to implement and tune. In practice they reach comparable
+performance, which is the whole reason PPO largely replaced TRPO.</p>
+<hr />
+<h2>TRPO vs PPO — why the approximation won</h2>
+<p>TRPO is the more principled algorithm: an exact trust region, a
+monotonic-improvement theorem, the natural gradient. PPO is the
+cruder one: a clip, first-order gradients, no guarantee. And yet
+<strong>PPO is what everyone uses</strong>. Why?</p>
+<ul>
+<li><strong>Simplicity.</strong> PPO is a few lines on top of A2C. TRPO needs
+  conjugate gradient, Fisher-vector products, and a line search —
+  more code, more that can go subtly wrong.</li>
+<li><strong>Compatibility.</strong> PPO is plain first-order SGD, so it drops
+  straight into any deep-learning stack and any architecture
+  (shared actor-critic bodies, recurrent nets, dropout). TRPO&rsquo;s
+  second-order machinery is fussier.</li>
+<li><strong>Comparable results.</strong> Empirically, PPO matches or beats TRPO
+  on most benchmarks despite — or because of — its looseness.</li>
+</ul>
+<p>TRPO is essential for <em>understanding</em> why constraining the step
+matters, and it remains the rigorous reference. But it&rsquo;s the
+classic story of a clean approximation winning on engineering
+grounds. Knowing TRPO is knowing what PPO is approximating, and
+why it gets away with it.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 3 turns to a different branch entirely: <strong>Deep Deterministic
+Policy Gradient (DDPG)</strong>. Everything so far in the policy-gradient
+line — REINFORCE, A2C, PPO, TRPO — has been <em>on-policy</em> and
+<em>stochastic</em>. DDPG is <strong>off-policy</strong> and learns a <strong>deterministic</strong>
+policy for <strong>continuous</strong> actions, bringing back DQN&rsquo;s replay
+buffer and target networks and marrying them to an actor-critic.
+It&rsquo;s where the value-based and policy-based families fuse into the
+methods that dominate continuous control.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/09-advanced-reinforcement-learning/02-trust-region-policy-optimisation/trpo.py"><strong>trpo.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python trpo.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in well under a minute. Every
+piece is from scratch: the actor and critic, GAE, the surrogate
+gradient, conjugate gradient, Fisher-vector products via a
+finite-difference Jacobian (no autograd), and the backtracking
+line search. The headline insight worth pinning to the wall:
+<strong>TRPO enforces an exact trust region — it maximises the surrogate
+subject to KL(π_old, π_new) ≤ δ — using the natural gradient
+<code>F⁻¹g</code>, solved by conjugate gradient with Fisher-vector products
+and a line search; the result is a monotonic, collapse-proof
+climb where every single update&rsquo;s KL stays under δ (max 0.0094
+for δ = 0.01), the exact guarantee PPO only approximates with a
+clip</strong>.</p>
+<hr />
+<p><em>This is Part 2 of the Advanced Reinforcement Learning track in the Algorithms in Python series. The companion script <code>trpo.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/234490f03c81">Part 1</a> covered PPO, the first-order approximation of the trust region this article enforces exactly. Part 3 will look at DDPG, an off-policy actor-critic for continuous control.</em></p>

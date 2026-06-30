@@ -104,7 +104,7 @@ clear explanations and Python implementations.
 | # | Algorithm | Status |
 |---|-----------|--------|
 | 1 | Proximal Policy Optimisation (PPO) | ✅ |
-| 2 | Trust Region Policy Optimisation (TRPO) | ⬜ |
+| 2 | Trust Region Policy Optimisation (TRPO) | ✅ |
 | 3 | Deep Deterministic Policy Gradient (DDPG) | ⬜ |
 | 4 | Twin Delayed DDPG (TD3) | ⬜ |
 | 5 | Soft Actor-Critic (SAC) | ⬜ |
