@@ -107,7 +107,7 @@ clear explanations and Python implementations.
 | 2 | Trust Region Policy Optimisation (TRPO) | ✅ |
 | 3 | Deep Deterministic Policy Gradient (DDPG) | ✅ |
 | 4 | Twin Delayed DDPG (TD3) | ✅ |
-| 5 | Soft Actor-Critic (SAC) | ⬜ |
+| 5 | Soft Actor-Critic (SAC) | ✅ |
 | 6 | Monte Carlo Tree Search (MCTS) | ✅ |
 | 7 | Offline Reinforcement Learning | ⬜ |
 

@@ -1,0 +1,235 @@
+<p>Every continuous-control method so far has treated exploration
+as an <em>afterthought</em>. DDPG and TD3 learn a <strong>deterministic</strong>
+policy — one exact torque per state — and then, purely so that
+training sees some variety, bolt Gaussian noise onto its output.
+The noise scale is a hyperparameter you pick, it has nothing to
+do with what the agent knows or doesn&rsquo;t, and at deployment it&rsquo;s
+simply switched off. Exploration lives <em>outside</em> the thing being
+optimised.</p>
+<p><strong>Soft Actor-Critic (SAC)</strong> (Haarnoja et al., 2018) moves it
+<em>inside</em>. The policy is <strong>stochastic</strong> again — it outputs a
+probability distribution over actions — and the objective is
+changed to reward not just return but <strong>entropy</strong>, the policy&rsquo;s
+own uncertainty:</p>
+<pre><code>J  =  E[ Σ_t  r_t  +  α · H( π(·|s_t) ) ]
+</code></pre>
+<p>The agent is literally <em>paid to keep its options open</em>, at a
+rate set by the <strong>temperature</strong> <code>α</code>. Where the critics are
+confident, the policy sharpens and collects reward; where they
+aren&rsquo;t, staying spread out costs little and keeps exploring. And
+in SAC&rsquo;s modern form, <code>α</code> is not a hyperparameter at all — it is
+<strong>auto-tuned</strong> so the policy holds a target level of entropy.
+The exploration schedule that DDPG made you hand-design writes
+itself.</p>
+<p>This article builds SAC from scratch in NumPy — the squashed
+Gaussian policy, the reparameterisation trick with every
+gradient derived by hand, TD3&rsquo;s twin critics, and the
+temperature controller — and shows the dial turning on its own.</p>
+<hr />
+<h2>Maximum-entropy RL: why pay for uncertainty?</h2>
+<p>Adding <code>α·H(π)</code> to the objective sounds like a hack. It is
+actually a principled reframing — <strong>maximum-entropy RL</strong> — with
+three practical payoffs:</p>
+<ul>
+<li><strong>Exploration that responds to knowledge.</strong> Entropy is only
+  surrendered when the critics offer reward in exchange. Early
+  on, Q is flat and wrong everywhere, so the cheapest way to
+  earn the entropy bonus is to stay broad. As Q sharpens, the
+  trade flips and the policy commits — <em>where</em> it has learned,
+  not on a clock.</li>
+<li><strong>Robustness.</strong> A policy trained to succeed <em>while remaining
+  stochastic</em> can&rsquo;t rely on knife-edge precision, so it degrades
+  gracefully under perturbation.</li>
+<li><strong>No collapsed exploration.</strong> Deterministic-policy methods can
+  stop exploring prematurely; the entropy term makes premature
+  certainty actively costly.</li>
+</ul>
+<p>The temperature <code>α</code> prices the trade. <code>α → 0</code> recovers ordinary
+RL; large <code>α</code> approaches uniform randomness. Everything
+interesting happens in between — which is why tuning it
+automatically matters so much.</p>
+<hr />
+<h2>The stochastic actor, rebuilt for continuous actions</h2>
+<p>SAC&rsquo;s policy network outputs <strong>two numbers per action
+dimension</strong>: a mean <code>μ(s)</code> and a standard deviation <code>σ(s)</code>. An
+action is drawn by sampling Gaussian noise and squashing it into
+the torque range:</p>
+<pre><code>a  =  bound · tanh( μ(s) + σ(s) · ε ),      ε ~ N(0, 1)
+</code></pre>
+<p>This is the <strong>reparameterisation trick</strong> (the same one that
+powers variational autoencoders): the randomness enters through
+an <em>external</em> <code>ε</code>, so the sampled action is a deterministic,
+differentiable function of the network outputs. Gradients flow
+<em>through the sample</em> — <code>dQ/da · da/dμ</code> — giving a far
+lower-variance learning signal than REINFORCE-style score
+functions, which can only correlate log-probabilities with
+returns.</p>
+<p>The <code>tanh</code> squashing has a price: it changes the distribution,
+so the log-probability needs a change-of-variables correction:</p>
+<pre><code>log π(a|s)  =  log N(u; μ, σ)  −  log( bound · (1 − tanh²(u)) )
+</code></pre>
+<p>The companion script implements this — and derives every
+gradient of it by hand, including how <code>log π</code> and the sampled
+action each depend on <code>μ</code> and <code>log σ</code>. It is the most delicate
+backprop in this series, and it fits in a dozen lines.</p>
+<hr />
+<h2>What SAC keeps, and what it changes</h2>
+<p>From <strong>TD3</strong> it keeps the twin critics and the pessimistic
+<code>min</code> — overestimation doesn&rsquo;t stop being a problem just because
+the policy is stochastic. From <strong>DDPG</strong> it keeps the replay
+buffer and soft target updates: SAC is <strong>off-policy</strong>, reusing
+old experience freely.</p>
+<p>The updates change in one consistent way: the entropy term
+follows the value everywhere it goes.</p>
+<p><strong>Critics</strong> regress toward a <em>soft</em> target — the reward, plus
+the discounted value of the next state <em>including its entropy
+bonus</em>:</p>
+<pre><code>y  =  r  +  γ ( min(Q1', Q2')(s', a')  −  α · log π(a'|s') )
+</code></pre>
+<p>with <code>a'</code> freshly sampled from the current policy (no target
+actor exists — the stochastic policy provides its own
+smoothing, which also supersedes TD3&rsquo;s target-noise trick).</p>
+<p><strong>The actor</strong> maximises the same soft value at the current
+state:</p>
+<pre><code>maximise   E[ min(Q1, Q2)(s, a_θ)  −  α · log π(a_θ|s) ]
+</code></pre>
+<p><strong>The temperature</strong> runs a tiny controller of its own. Pick a
+<em>target entropy</em> <code>H̄</code> (the standard default: <code>−dim(A)</code>, here
+<code>−1</code>), and adjust <code>α</code> by gradient descent so the policy&rsquo;s actual
+entropy tracks it: entropy above target → <code>α</code> falls; below →
+<code>α</code> rises. One line of code, and the exploration dial turns
+itself.</p>
+<hr />
+<h2>A worked example: SAC on Pendulum</h2>
+<p>Same environment as DDPG and TD3, so the comparison is direct.</p>
+<pre><code>DEMO 1 --- SAC solves Pendulum swing-up (stochastic policy)
+  Actor : 3 -&gt; 64 -&gt; 64 -&gt; (mu, sigma)   a ~ 2*tanh(N(mu, sigma))
+  Twin critics + min (from TD3)  |  entropy-regularised objective
+  Episodes: 60  gamma=0.99  tau=0.01  auto-tuned alpha, target entropy -1.0
+ 
+  Mean episode return by 12-episode block (0 is best, random ~ -1300):
+    episodes   1- 12 :  -1220.7  ####
+    episodes  13- 24 :   -133.2  ###############################
+    episodes  25- 36 :   -146.3  ###############################
+    episodes  37- 48 :   -150.8  ###############################
+    episodes  49- 60 :   -143.0  ###############################
+ 
+  Final mean return (last 20 episodes): -156.0
+</code></pre>
+<p>Look at the second block. SAC is already at <strong>−133</strong> in episodes
+13–24 — on the same task, seed, and episode budget where DDPG&rsquo;s
+second block was −510 and TD3&rsquo;s was −912. On this (small,
+one-seed) benchmark, the entropy-driven explorer is the fastest
+learner of the three, and it holds its solution steadily.</p>
+<h3>The headline: the dial turns itself</h3>
+<p>No noise schedule was written anywhere in the code. Here is what
+the temperature controller and the policy&rsquo;s spread did on their
+own:</p>
+<pre><code>DEMO 2 --- The exploration dial turns itself
+    episode    alpha     mean sigma    policy entropy
+    (start)     0.200      ~1.0           ~0.0
+       10       0.061       0.577         -0.67
+       20       0.068       0.385         -0.89
+       30       0.053       0.267         -0.85
+       40       0.044       0.287         -0.74
+       50       0.038       0.352         -0.72
+       60       0.030       0.352         -0.70
+ 
+  alpha turns itself down ~7x and sigma halves as the critics sharpen;
+  the entropy is steered from ~0 into a steady band just above the
+  target. Exploration is scheduled by the objective, not by hand.
+</code></pre>
+<p>Read the columns. The policy starts wide (<code>σ ≈ 1</code>, entropy near
+zero nats) while the critics know nothing. As they sharpen, the
+controller cuts <code>α</code> from 0.200 to 0.030 — certainty gets cheaper
+— and <code>σ</code> anneals from ~1.0 to ~0.3: broad exploration early,
+commitment late. The entropy settles into a steady band just
+above the −1.0 target, with <code>α</code> still gently annealing to close
+the gap. This is the behaviour DDPG&rsquo;s hand-tuned, fixed noise
+scale approximates crudely — produced here by the objective
+itself, adapting to what the critics actually know.</p>
+<h3>Deploy the mean</h3>
+<p>At evaluation time you don&rsquo;t sample — you act on the
+distribution&rsquo;s mean:</p>
+<pre><code>DEMO 3 --- Act on the mean: a strong deterministic controller
+    start seed 11:   return   -230.8
+    start seed 22:   return   -125.4
+    start seed 33:   return     -2.4
+    start seed 44:   return   -227.4
+    start seed 55:   return   -115.0
+ 
+  Mean over 5 unseen starts: -140
+</code></pre>
+<p>From five never-seen starts, the mean policy swings up and
+balances every time (seed 33&rsquo;s −2.4 is a near-perfect hold) —
+matching the TD3 controller of Part 4. The stochasticity was for
+<em>learning</em>; the mean is what you ship.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>SAC&rsquo;s costs are TD3&rsquo;s, with the target actor swapped for a
+sampling step and a one-parameter controller.</p>
+<p><strong>Per step</strong>: one reparameterised sample (an actor forward pass
+plus <code>O(1)</code> noise), two critic updates <code>O(B · W)</code>, one actor
+update <code>O(B · W)</code> (which backprops through <em>both</em> critics for
+the per-sample <code>min</code>), and the scalar <code>α</code> update — <code>O(B)</code>.</p>
+<p><strong>Memory</strong>: <code>O(W + N · d)</code> — five networks (actor, two critics,
+two target critics; <strong>no target actor</strong>) plus the replay buffer.</p>
+<p><strong>The trade against TD3</strong>: nearly identical compute, one extra
+mechanism (the temperature controller), in exchange for
+exploration that adapts itself and a policy that is robustly
+stochastic during training. Against PPO: off-policy replay makes
+SAC far more sample-efficient, at the cost of PPO&rsquo;s simplicity.
+SAC and TD3 are the two default choices for continuous control;
+SAC is usually the first thing to try when exploration is the
+hard part.</p>
+<hr />
+<h2>The maximum-entropy thread</h2>
+<p>Entropy bonuses aren&rsquo;t new — A3C and PPO implementations have
+long added a small fixed entropy term to keep policies from
+collapsing. SAC&rsquo;s contribution was to take that heuristic
+seriously: derive the <em>soft</em> Bellman equations where entropy is
+part of the value itself (building on soft Q-learning), train an
+actor-critic on them off-policy, and then close the loop by
+tuning the temperature against an entropy <em>constraint</em> rather
+than leaving it as a magic number (Haarnoja et al., 2018 — the
+original SAC, and the follow-up that added automatic temperature
+tuning).</p>
+<p>The result completed the continuous-control arc of this track:
+<strong>DDPG</strong> brought DQN&rsquo;s machinery to continuous actions, <strong>TD3</strong>
+made its value estimates honest, and <strong>SAC</strong> made its
+exploration principled. Those three, plus PPO on the on-policy
+side, are the workhorses of modern continuous control.</p>
+<hr />
+<h2>What comes next</h2>
+<p>With Part 6 (<strong>Monte Carlo Tree Search</strong>) covering planning, one
+article remains: <strong>Offline Reinforcement Learning</strong> — learning a
+policy from a <em>fixed dataset</em> with no environment interaction at
+all. Every off-policy method in this track quietly assumed it
+could keep collecting data; Part 7 removes that assumption and
+confronts what happens when the value function believes in
+actions the data can&rsquo;t support. It closes the track.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/09-advanced-reinforcement-learning/05-soft-actor-critic/sac.py"><strong>sac.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python sac.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in well under a minute. Every
+piece is from scratch: the Pendulum physics, the squashed
+Gaussian actor with hand-derived reparameterisation gradients
+(including the tanh change of variables in <code>log π</code>), twin
+critics with the pessimistic <code>min</code>, the replay buffer, soft
+target updates, and the one-line temperature controller. The
+headline insight worth pinning to the wall: <strong>SAC puts
+exploration inside the objective — the policy is a tanh-squashed
+Gaussian trained through its own samples to maximise reward plus
+<code>α</code> times its entropy, and <code>α</code> is auto-tuned to hold a target
+entropy; on Pendulum the dial visibly turns itself, <code>α</code> falling
+7× and the policy&rsquo;s spread halving as the critics sharpen, with
+no hand-written noise schedule anywhere — and it reaches the
+swing-up faster than DDPG or TD3 did</strong>.</p>
+<hr />
+<p><em>This is Part 5 of the Advanced Reinforcement Learning track in the Algorithms in Python series. The companion script <code>sac.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It completes the continuous-control arc begun with <a href="https://medium.com/p/88eecb39f5d9">DDPG</a> and made robust by <a href="https://medium.com/p/d3a3ccf0bf44">TD3</a>. <a href="https://medium.com/p/1a37862620b5">Part 6</a> covered Monte Carlo Tree Search; Part 7, Offline Reinforcement Learning, closes the track.</em></p>
