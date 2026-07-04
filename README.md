@@ -108,7 +108,7 @@ clear explanations and Python implementations.
 | 3 | Deep Deterministic Policy Gradient (DDPG) | ✅ |
 | 4 | Twin Delayed DDPG (TD3) | ✅ |
 | 5 | Soft Actor-Critic (SAC) | ⬜ |
-| 6 | Monte Carlo Tree Search (MCTS) | ⬜ |
+| 6 | Monte Carlo Tree Search (MCTS) | ✅ |
 | 7 | Offline Reinforcement Learning | ⬜ |
 
 ### 10 — Semi-Supervised Learning
