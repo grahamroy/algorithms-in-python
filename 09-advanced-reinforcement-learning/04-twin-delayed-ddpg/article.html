@@ -1,0 +1,236 @@
+<p>The DDPG article ended on a confession. DDPG works — it swung a
+pendulum upright with a continuous torque DQN could never
+produce — but it is <em>brittle</em>, and the culprit is a specific,
+diagnosable flaw: <strong>its critic overestimates</strong>. The <code>Q(s, a)</code> it
+learns drifts systematically higher than the returns the policy
+actually achieves, and because the actor is trained to <em>maximise</em>
+that critic, it seeks out and exploits exactly those inflated
+values. The policy chases a number that isn&rsquo;t real.</p>
+<p><strong>Twin Delayed DDPG (TD3)</strong> (Fujimoto et al., 2018) is DDPG with
+three targeted fixes for this, and it has become the reliable
+default that plain DDPG never was. The three fixes:</p>
+<ol>
+<li><strong>Twin critics + clipped double-Q</strong> — keep <em>two</em> critics and
+   build the TD target from the <strong>smaller</strong> of their estimates.
+   Being pessimistic about your own value kills the
+   overestimation. <em>(The headline.)</em></li>
+<li><strong>Delayed policy updates</strong> — update the actor less often than
+   the critics, so it chases a value that has had time to settle.</li>
+<li><strong>Target policy smoothing</strong> — add small noise to the target
+   action, so the critic can&rsquo;t overfit to a sharp, fake peak.</li>
+</ol>
+<p>This article builds TD3 from scratch in NumPy — six networks now,
+the twin-critic targets, the delayed updates — on the same
+Pendulum as DDPG, and shows the overestimation directly:
+DDPG&rsquo;s critic predicting a value it is <em>provably impossible</em> to
+achieve, and TD3&rsquo;s twin-min keeping it honest.</p>
+<hr />
+<h2>The overestimation problem</h2>
+<p>Where does the inflation come from? It&rsquo;s a chain of three things.</p>
+<p><strong>Function approximation is noisy.</strong> A learned <code>Q(s, a)</code> is never
+exact; it&rsquo;s high in some places, low in others, by accident of
+the fit.</p>
+<p><strong>Maximisation turns noise into bias.</strong> DDPG&rsquo;s actor is trained
+to output the action that <em>maximises</em> Q. Maximising over a noisy
+function preferentially selects the spots where the noise happens
+to be <em>positive</em> — so the value of the chosen action is
+systematically <strong>over</strong>estimated. (This is the same upward bias
+that <code>max</code> gives Q-learning, which Double DQN fixed for the
+discrete case.)</p>
+<p><strong>Bootstrapping compounds it.</strong> The overestimated value becomes
+the TD target for the next update, which inflates the next
+estimate, and so on. The error doesn&rsquo;t average out; it
+accumulates.</p>
+<p>The result: <code>Q</code> climbs above the true return, the actor exploits
+the phantom, and on hard tasks the whole thing destabilises. TD3
+attacks all three links.</p>
+<hr />
+<h2>Fix 1: twin critics and the clipped double-Q target</h2>
+<p>The core fix. TD3 keeps <strong>two</strong> critics, <code>Q1</code> and <code>Q2</code>, trained
+on the same data but from different random initialisations. When
+it builds the TD target, it uses the <strong>minimum</strong> of the two
+target critics:</p>
+<pre><code>y  =  r  +  γ · min( Q1'(s', ã'),  Q2'(s', ã') )
+</code></pre>
+<p>The intuition is simple and powerful. An action that one critic
+overestimates is unlikely to be overestimated <em>by the same
+amount</em> by the other. Taking the <code>min</code> systematically picks the
+more conservative estimate, cancelling the upward bias. You trade
+a little downward pessimism — which is harmless, even helpful —
+for eliminating the dangerous overestimation. This is <strong>clipped
+double-Q learning</strong>, the continuous-control descendant of Double
+DQN.</p>
+<p>The actor is trained to maximise just one of them (<code>Q1</code>); it only
+needs a single value to ascend.</p>
+<hr />
+<h2>Fix 2: delayed policy updates</h2>
+<p>The actor and the critic are locked in a feedback loop: the actor
+chases the critic, the critic bootstraps off the actor. If they
+update in lockstep, errors ping-pong between them. TD3 breaks the
+symmetry by updating the <strong>actor (and all target networks) less
+often</strong> than the critics — here, once every <strong>two</strong> critic
+updates. The critics get to refine their estimate on fixed
+targets before the actor moves, so the actor chases a value that
+has settled rather than one still thrashing. Slower, steadier,
+more stable.</p>
+<hr />
+<h2>Fix 3: target policy smoothing</h2>
+<p>A deterministic actor can exploit any sharp, narrow spike in the
+critic — a spot where <code>Q</code> is erroneously high for one exact
+action. TD3 blunts those spikes by adding a small amount of
+<strong>clipped noise</strong> to the <em>target</em> action when computing the TD
+target:</p>
+<pre><code>ã'  =  clip( μ'(s') + clip(noise, −c, c),  action range )
+</code></pre>
+<p>This forces the critic to produce similar values for similar
+actions — a smoothness regulariser on the value function. The
+policy can no longer chase a one-pixel-wide peak, because the
+target has been deliberately blurred around it.</p>
+<hr />
+<h2>The algorithm</h2>
+<pre><code>TD3(episodes, γ, policy_delay d):
+    init actor μ, twin critics Q1, Q2, and all their targets
+    for each step:
+        act with μ(s) + exploration noise;  store (s,a,r,s') in replay
+        sample a minibatch:
+            ã' = μ'(s') + clipped noise            # target smoothing
+            y  = r + γ · min(Q1'(s',ã'), Q2'(s',ã'))  # clipped double-Q
+            update BOTH critics toward y
+            every d steps:                          # delayed
+                actor: ascend Q1(s, μ(s))  via dQ/da
+                soft-update all target networks
+    return μ, Q1
+</code></pre>
+<p>Six networks in play — the actor, two critics, and their three
+targets. The critic loop is DQN&rsquo;s, doubled and made pessimistic;
+the actor loop is DDPG&rsquo;s deterministic policy gradient, run at
+half the rate.</p>
+<hr />
+<h2>A worked example: the overestimation, made visible</h2>
+<p>The companion script trains TD3 on Pendulum. First, it works:</p>
+<pre><code>DEMO 1 --- TD3 solves Pendulum swing-up
+  Actor: 3-&gt;64-&gt;64-&gt;1   Twin critics: 4-&gt;64-&gt;64-&gt;1 each
+  Episodes: 60  gamma=0.99  tau=0.01  policy_delay=2  twin critics + target smoothing
+ 
+  Mean episode return by 12-episode block (0 is best, random ~ -1300):
+    episodes   1- 12 :  -1331.9  #
+    episodes  13- 24 :   -912.4  ############
+    episodes  25- 36 :   -142.2  ###############################
+    episodes  37- 48 :   -164.0  ##############################
+    episodes  49- 60 :   -161.4  ##############################
+ 
+  Final mean return (last 20 episodes): -169.9
+</code></pre>
+<p>Same swing-up as DDPG, same ballpark result. The interesting part
+is <em>the value function underneath</em>.</p>
+<h3>The headline: a value that can&rsquo;t be true</h3>
+<p>Pendulum&rsquo;s reward is <code>−(angle² + …)</code> — it is <strong>always ≤ 0</strong>. So
+the true value of <em>any</em> state, the discounted sum of future
+rewards, must also be <code>≤ 0</code>. That gives us a free lie detector.
+The script measures each critic&rsquo;s predicted <code>Q(s, μ(s))</code> against
+the return the policy <em>actually</em> earns from those states:</p>
+<pre><code>DEMO 2 --- The twin-critic min fixes DDPG's overestimation
+  Single critic (DDPG-style): predicted Q =    +5.0   actual return =    -4.6
+     -&gt; Q is POSITIVE -- impossible when every reward is &lt;= 0. Overestimates by 9.6.
+ 
+  Twin critics + min (TD3)  : predicted Q =    -8.4   actual return =    -4.9
+     -&gt; stays negative, close to the truth (gap -3.5).
+</code></pre>
+<p>The single-critic value (DDPG&rsquo;s approach — the <em>only</em> difference
+in this comparison) predicts <code>Q = +5.0</code>. That is not a small
+error; it is a <strong>positive</strong> value on a task where every reward is
+negative — a return the policy could not achieve if it played
+perfectly. The critic believes in something impossible, and the
+actor is optimising toward it.</p>
+<p>TD3&rsquo;s twin-min predicts <code>Q = −8.4</code> — negative, plausible, close
+to the true <code>−4.9</code> (erring slightly <em>pessimistic</em>, which is
+exactly the safe direction). One change — <code>min</code> of two critics
+instead of one — turns an impossible value into an honest one.</p>
+<p>On easy Pendulum both still solve the task, but that inflated
+value is precisely what spirals out of control on harder problems
+and makes DDPG diverge. TD3 removes it at the source.</p>
+<h3>A robust controller</h3>
+<p>With an honest value underneath, the greedy policy generalises
+cleanly to starts it never saw:</p>
+<pre><code>DEMO 3 --- The trained TD3 policy, from unseen starts
+    start seed 11:   return   -236.6
+    start seed 22:   return   -124.0
+    start seed 33:   return     -2.4
+    start seed 44:   return   -233.2
+    start seed 55:   return   -115.1
+ 
+  Mean over 5 unseen starts: -142
+</code></pre>
+<p>Reliable swing-ups (seed 33&rsquo;s −2.4 is nearly perfect), built on a
+value function that no longer lies to it.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>TD3 costs a little more than DDPG — a second critic and a <code>min</code>,
+with the actor updated at half the rate.</p>
+<p><strong>Per step</strong>: two critic updates instead of one, <code>O(B · W)</code>, plus
+— every <code>d</code> steps — one actor update and the soft-update
+averages. The delayed schedule means the actor pass runs <em>less</em>
+often than DDPG&rsquo;s, partly offsetting the second critic.</p>
+<p><strong>Memory</strong>: <code>O(W + N · d)</code> — six networks (still a constant
+factor) plus the replay buffer. The second critic doubles the
+critic weights; the buffer, as always, dominates.</p>
+<p><strong>The trade it makes</strong>: strictly more compute per step than DDPG,
+in exchange for a value estimate that doesn&rsquo;t inflate and a policy
+that doesn&rsquo;t chase phantoms. On any task where DDPG&rsquo;s
+overestimation bites — which is most of them — that is a trade
+worth making, and it is why TD3, not DDPG, is the practical
+default for deterministic continuous control.</p>
+<hr />
+<h2>TD3 in the family</h2>
+<p>TD3 is best understood as <strong>DDPG, debugged</strong>. It changes none of
+DDPG&rsquo;s structure — off-policy, deterministic, actor-critic,
+replay, target networks — and adds only the three fixes above.
+Every one of them is a form of <em>humility about your own
+estimates</em>: take the smaller value, move the policy slower, don&rsquo;t
+trust a sharp peak.</p>
+<p>Against its neighbours:</p>
+<ul>
+<li><strong>vs DDPG</strong> — same algorithm, far more stable. There is little
+  reason to run plain DDPG once you have TD3.</li>
+<li><strong>vs SAC</strong> (next) — TD3 keeps the deterministic policy and adds
+  pessimism; <strong>SAC</strong> makes the policy <em>stochastic</em> again and adds
+  an <strong>entropy bonus</strong> that rewards keeping options open. SAC
+  borrows TD3&rsquo;s twin-critic min, so it&rsquo;s TD3&rsquo;s ideas plus
+  principled exploration. On many benchmarks SAC edges ahead, but
+  the two are close, and both descend from the DDPG you built in
+  Part 3.</li>
+</ul>
+<hr />
+<h2>What comes next</h2>
+<p>Part 5 — the final algorithm in this track — is <strong>Soft
+Actor-Critic (SAC)</strong>. It rethinks exploration from the ground up:
+instead of bolting noise onto a deterministic policy, it makes
+the policy stochastic and adds the policy&rsquo;s <strong>entropy</strong> directly
+to the objective, so the agent is rewarded for staying
+appropriately uncertain. It keeps TD3&rsquo;s twin-critic pessimism and
+adds maximum-entropy RL on top — often the strongest of the
+continuous-control methods, and a fitting close to the series.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/09-advanced-reinforcement-learning/04-twin-delayed-ddpg/td3.py"><strong>td3.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python td3.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in well under a minute. Every
+piece is from scratch: the Pendulum physics, the actor and twin
+critics with hand-written backprop and Adam, the replay buffer,
+the delayed soft-updated targets, the target-smoothing noise, and
+the clipped double-Q target. The headline insight worth pinning to
+the wall: <strong>TD3 is DDPG made honest — it keeps two critics and
+builds its TD target from the <em>minimum</em> of them (clipped
+double-Q), so the value can&rsquo;t inflate the way DDPG&rsquo;s does; add
+delayed actor updates and target-action smoothing and the whole
+method stops chasing phantom values. On Pendulum, DDPG&rsquo;s single
+critic predicts an impossible positive value (+5) on a task where
+every reward is negative; TD3&rsquo;s twin-min stays negative and close
+to the truth</strong>.</p>
+<hr />
+<p><em>This is Part 4 of the Advanced Reinforcement Learning track in the Algorithms in Python series. The companion script <code>td3.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It is <a href="https://medium.com/p/88eecb39f5d9">DDPG</a> with three fixes for the value overestimation that made DDPG brittle. Part 5 will look at Soft Actor-Critic, which adds maximum-entropy exploration to close the track.</em></p>
