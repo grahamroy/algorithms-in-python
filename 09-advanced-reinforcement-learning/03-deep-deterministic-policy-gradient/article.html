@@ -1,0 +1,255 @@
+<p>Every algorithm in the policy-gradient line so far — REINFORCE,
+A2C, PPO, TRPO — has shared two traits: it is <strong>on-policy</strong>
+(each batch of experience is used once and discarded) and
+<strong>stochastic</strong> (the policy is a probability distribution you
+sample from). And the one off-policy method we built, <strong>DQN</strong>,
+had a hard limit: it picks actions by <code>argmax_a Q(s, a)</code>, which
+requires <em>enumerating</em> the actions. That works for a joystick
+with a few buttons. It is impossible for a steering angle, a
+joint torque, a throttle — a <strong>continuous</strong> action, of which
+there are infinitely many.</p>
+<p><strong>Deep Deterministic Policy Gradient (DDPG)</strong> (Lillicrap et al.,
+2016) fills exactly this gap. It is, in one line, <strong>DQN for
+continuous actions</strong>. It keeps DQN&rsquo;s off-policy machinery — the
+replay buffer and target networks — but replaces the impossible
+<code>argmax</code> with an <strong>actor network</strong> that <em>outputs</em> the best
+action directly, and a <strong>critic</strong> that evaluates it. The actor
+is trained by the <strong>deterministic policy gradient</strong>: nudge its
+output in the direction that increases the critic&rsquo;s Q. It is
+off-policy, deterministic, and continuous — the combination none
+of the previous methods offered.</p>
+<p>This article builds DDPG from scratch in NumPy — actor, critic,
+their two target networks, the replay buffer, and the <code>dQ/da</code>
+gradient chain that couples the two — and trains it on
+<strong>Pendulum</strong>, a classic continuous-control swing-up task that
+DQN&rsquo;s discrete <code>argmax</code> fundamentally cannot solve.</p>
+<hr />
+<h2>The problem: argmax dies on a continuum</h2>
+<p>DQN&rsquo;s action rule is <code>a = argmax_a Q(s, a)</code>. To evaluate it you
+compute <code>Q(s, a)</code> for <em>every</em> action and take the best. With a
+continuous action there is no &ldquo;every&rdquo; — the torque <code>a ∈ [-2, 2]</code>
+takes infinitely many values, and you cannot maximise over them
+by enumeration.</p>
+<p>DDPG&rsquo;s move is to <em>learn the argmax</em>. Instead of searching for
+the best action at every step, it trains a network to <strong>produce</strong>
+it:</p>
+<pre><code>actor   μ(s; θ)   →  the action to take (a continuous torque)
+critic  Q(s, a; w) →  how good that state-action pair is
+</code></pre>
+<p>The critic is trained exactly as in DQN — regression toward a TD
+target. The actor is trained to output actions the critic
+scores highly. Between them they replace the <code>argmax</code> with a
+gradient.</p>
+<hr />
+<h2>The deterministic policy gradient</h2>
+<p>How do you train an actor when there&rsquo;s no &ldquo;correct action&rdquo; label
+— only a critic&rsquo;s opinion? You use the critic as the loss. The
+actor&rsquo;s objective is simply to maximise the Q-value of the
+actions it chooses:</p>
+<pre><code>J(θ)  =  E_s[ Q(s, μ(s; θ)) ]
+</code></pre>
+<p>Its gradient — the <strong>deterministic policy gradient</strong> (Silver et
+al., 2014) — follows from the chain rule:</p>
+<pre><code>∇θ J  =  E_s[  ∇a Q(s, a)|_{a=μ(s)}  ·  ∇θ μ(s; θ)  ]
+</code></pre>
+<p>Read it left to right: <code>∇a Q</code> says <em>which way to move the action</em>
+to increase Q; <code>∇θ μ</code> says <em>how to change the actor&rsquo;s weights to
+move the action that way</em>. Chain them and you get how to change
+<code>θ</code> to make the actor output higher-Q actions. In code it is one
+backward pass of <code>Q</code> <strong>into its action input</strong>, then continued
+through the actor — the companion script does exactly this,
+computing <code>dQ/da</code> from the critic and feeding it as the gradient
+signal to the actor. It is gradient <em>ascent</em> on the critic,
+routed through the policy.</p>
+<p>Unlike the stochastic policy gradient (which weights <code>∇ log π</code> by
+a return), there is no sampling and no log-probability here — the
+policy is a deterministic function, and the gradient flows
+straight through the critic. That directness is what makes DDPG
+efficient on continuous actions, and also what makes it delicate,
+as we&rsquo;ll see.</p>
+<hr />
+<h2>What it inherits from DQN</h2>
+<p>A naive actor-critic like this diverges, for the same reasons a
+naive DQN does. DDPG borrows DQN&rsquo;s two fixes wholesale — now
+applied to <strong>both</strong> networks:</p>
+<ul>
+<li><strong>A replay buffer.</strong> Every transition <code>(s, a, r, s')</code> is stored
+  and sampled in random minibatches. This makes DDPG <strong>off-policy</strong>
+  — it learns from old data collected by older policies, reusing
+  each transition many times. PPO and TRPO cannot do this; it is
+  DDPG&rsquo;s big sample-efficiency advantage.</li>
+<li><strong>Target networks.</strong> Slowly-tracking copies of <em>both</em> the actor
+  and the critic, <code>μ'</code> and <code>Q'</code>, provide the stable TD target
+  <code>y = r + γ Q'(s', μ'(s'))</code>. DDPG uses a <strong>soft (Polyak) update</strong>
+  — <code>θ' ← τθ + (1−τ)θ'</code> every step with a small <code>τ</code> — rather than
+  DQN&rsquo;s periodic hard copy.</li>
+</ul>
+<p>There&rsquo;s one new ingredient. A deterministic policy has no
+randomness of its own, so it cannot explore. DDPG adds
+<strong>exploration noise</strong> to the actor&rsquo;s action during training
+(here, Gaussian noise; the original paper used correlated
+Ornstein-Uhlenbeck noise). At evaluation the noise is switched
+off and the policy is purely deterministic.</p>
+<hr />
+<h2>The algorithm</h2>
+<pre><code>DDPG(episodes, γ, τ):
+    init actor μ, critic Q, and targets μ' ← μ, Q' ← Q
+    init empty replay buffer
+    for each step:
+        a = μ(s) + exploration noise;  clip to the action range
+        take a, observe r, s';  store (s, a, r, s') in the buffer
+        sample a random minibatch:
+            y = r + γ Q'(s', μ'(s'))                 # TD target
+            critic: minimise ( Q(s, a) − y )²
+            actor : ascend Q(s, μ(s))  via  dQ/da → dμ/dθ
+            soft-update:  μ' ← τμ + (1−τ)μ' ;  Q' ← τQ + (1−τ)Q'
+</code></pre>
+<p>Four networks in flight: the actor and critic being trained, and
+their two slow-moving targets. The critic loop <em>is</em> DQN; the
+actor loop is the deterministic policy gradient; the replay and
+targets are the glue.</p>
+<hr />
+<h2>A worked example: Pendulum swing-up</h2>
+<p>The companion script trains DDPG on Pendulum — swing an
+under-powered pendulum from hanging to upright and hold it. The
+reward is <code>−(angle² + 0.1·angular_velocity² + 0.001·torque²)</code>, so
+0 is a perfectly balanced pole and a flailing random policy
+scores about −1300.</p>
+<pre><code>DEMO 1 --- DDPG solves Pendulum swing-up (continuous torque)
+  Actor : 3 -&gt; 64 -&gt; 64 -&gt; 1  (torque in [-2, 2] via tanh)
+  Critic: 4 -&gt; 64 -&gt; 64 -&gt; 1  (Q of state AND action)
+  Episodes: 80  gamma=0.99  tau=0.01  replay + target nets
+ 
+  Mean episode return by 12-episode block (0 is best, random ~ -1300):
+    episodes   1- 12 :  -1300.1  ##
+    episodes  13- 24 :   -509.9  ######################
+    episodes  25- 36 :   -145.4  ###############################
+    episodes  37- 48 :   -183.5  ##############################
+    episodes  49- 60 :   -167.3  ##############################
+    episodes  61- 72 :   -187.0  ##############################
+    episodes  73- 80 :   -207.4  #############################
+ 
+  Final mean return (last 20 episodes): -195.2
+</code></pre>
+<p>Within about 25 episodes DDPG goes from hopeless (−1300) to a
+solid swing-up (~−170), learning off-policy from its replay
+buffer the whole time.</p>
+<h3>The headline: continuous control DQN can&rsquo;t do</h3>
+<p>The point of DDPG is the <em>kind</em> of action it produces. Run the
+trained policy greedily from hanging straight down and watch it
+work:</p>
+<pre><code>DEMO 2 --- The swing-up in action (continuous torque control)
+    step    angle from upright    torque applied
+       0            180 deg            +2.00
+      20            159 deg            -2.00
+      40            162 deg            +1.51
+      60              3 deg            -0.99
+      80             10 deg            -2.00
+     100             10 deg            -1.48
+     120             10 deg            -0.95
+     140             10 deg            -0.95
+     180             10 deg            -1.92
+</code></pre>
+<p>The pendulum starts hanging at 180°. The actor can&rsquo;t just shove
+it to the top — it&rsquo;s under-powered — so it <strong>pumps</strong>: full torque
+one way, full torque back, building energy (the angle swings
+around 160° before breaking free). By step 60 it has caught the
+pendulum near upright (3°), and from there it <em>balances</em>, applying
+a <strong>continuously varying</strong> torque — <code>−0.99</code>, <code>−1.48</code>, <code>−0.95</code>,
+<code>−1.92</code> — to hold it. Those fractional, smoothly-changing torques
+are exactly what a discrete-action agent cannot output. This is
+the capability DDPG unlocks.</p>
+<h3>Off-policy and reliable</h3>
+<p>Because it&rsquo;s off-policy, the learned policy generalises to starts
+it never trained on:</p>
+<pre><code>DEMO 3 --- Off-policy and reliable: greedy runs from unseen starts
+    start seed 11:   return   -231.5
+    start seed 22:   return   -130.7
+    start seed 33:   return     -7.7
+    start seed 44:   return   -228.1
+    start seed 55:   return   -120.1
+ 
+  Mean over 5 unseen starts: -144
+</code></pre>
+<p>From five random starts it never saw, the greedy policy reliably
+swings up and balances (mean −144; seed 33&rsquo;s −7.7 is a nearly
+perfect hold). It learned all of this from a replay buffer of
+recycled transitions — the off-policy efficiency PPO and TRPO
+give up.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>DDPG runs four networks but only ever trains two; the targets are
+updated by cheap averaging.</p>
+<p><strong>Per step</strong>: <code>O(W)</code> to act (one actor pass), then a gradient
+update on a minibatch of <code>B</code> — one critic backward, one actor
+backward (which includes a <code>dQ/da</code> pass through the critic), and
+two soft-update averages: <code>O(B · W)</code>.</p>
+<p><strong>Memory</strong>: <code>O(W + N · d)</code> — four networks (a small constant
+factor) plus a replay buffer of <code>N</code> transitions. The buffer is
+the memory cost DQN also pays, and the price of being off-policy.</p>
+<p><strong>Sample efficiency vs on-policy</strong>: this is DDPG&rsquo;s edge. Every
+transition is replayed in many minibatches, so DDPG solves
+Pendulum in a few thousand environment steps — far fewer than an
+on-policy method needs, because those throw each rollout away.</p>
+<p><strong>The catch</strong>: DDPG is famously <em>brittle</em>. The deterministic
+policy gradient flows through a critic that is only accurate near
+the actions the actor takes; away from them, <code>Q</code> can be wildly
+<strong>overestimated</strong>, and the actor happily exploits those phantom
+values. Combined with its sensitivity to hyperparameters, this
+makes DDPG powerful but temperamental — which is precisely what
+the next two algorithms set out to fix.</p>
+<hr />
+<h2>When to use DDPG — and its successors</h2>
+<p><strong>Use DDPG when</strong> actions are continuous and sample efficiency
+matters — robotics, control, anything where each environment step
+is expensive and you want to squeeze reuse out of a replay
+buffer. It brought DQN-style off-policy learning to continuous
+control, and every modern continuous-control algorithm descends
+from it.</p>
+<p><strong>But reach for its successors in practice</strong>, because DDPG&rsquo;s
+brittleness was worth fixing:</p>
+<ul>
+<li><strong>TD3</strong> (Twin Delayed DDPG, Part 4) attacks the Q-overestimation
+  head-on — two critics and a <code>min</code> to stay pessimistic, plus
+  delayed and smoothed updates. It is DDPG made robust.</li>
+<li><strong>SAC</strong> (Soft Actor-Critic, Part 5) makes the policy stochastic
+  again and adds an entropy bonus for principled exploration,
+  usually the strongest of the three.</li>
+</ul>
+<p>DDPG is the foundation both build on. Understanding its
+deterministic policy gradient — and its overestimation problem —
+is understanding why TD3 and SAC look the way they do.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 4 is <strong>TD3 (Twin Delayed DDPG)</strong> — the same actor-critic
+skeleton you just built, with three targeted fixes for DDPG&rsquo;s
+instability. The headline one: keep <strong>two</strong> critics and always
+use the <em>smaller</em> of their Q-estimates for the target, so the
+actor can no longer chase an overestimated value. It is the most
+direct illustration in RL of a simple idea — be pessimistic about
+your own estimates — turning a temperamental algorithm into a
+dependable one.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/09-advanced-reinforcement-learning/03-deep-deterministic-policy-gradient/ddpg.py"><strong>ddpg.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python ddpg.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in well under a minute. Every
+piece is from scratch: the Pendulum physics, the actor and critic
+MLPs with hand-written backprop and Adam, the replay buffer, the
+soft-updated target networks, and the <code>dQ/da</code> chain that carries
+the deterministic policy gradient from the critic into the actor.
+The headline insight worth pinning to the wall: <strong>DDPG is DQN for
+continuous actions — it replaces the impossible <code>argmax</code> with an
+actor <code>μ(s)</code> that outputs the action and a critic <code>Q(s,a)</code> that
+scores it, and trains the actor by pushing its output up the
+critic&rsquo;s Q-gradient (<code>dQ/da → dμ/dθ</code>); keeping DQN&rsquo;s replay
+buffer and target networks makes it off-policy and
+sample-efficient, and it swings up a pendulum with a continuous,
+smoothly-varying torque no discrete-action agent could produce</strong>.</p>
+<hr />
+<p><em>This is Part 3 of the Advanced Reinforcement Learning track in the Algorithms in Python series. The companion script <code>ddpg.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It fuses <a href="https://medium.com/p/0102b41f786d">DQN</a>&rsquo;s off-policy replay and target networks with the actor-critic of the policy-gradient line. Part 4 will look at TD3, which fixes DDPG&rsquo;s Q-value overestimation to make it robust.</em></p>
