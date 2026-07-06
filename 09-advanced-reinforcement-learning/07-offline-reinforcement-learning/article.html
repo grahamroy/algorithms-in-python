@@ -1,0 +1,221 @@
+<p>Every off-policy algorithm in this series — DQN, DDPG, TD3, SAC —
+carried a quiet assumption that we never examined, because it
+never failed. If the value function went wrong somewhere, the
+agent would soon <em>act</em> on the mistake, observe the real outcome,
+and be corrected. Exploration wasn&rsquo;t just how the agent found
+good actions; it was how its beliefs stayed tethered to reality.</p>
+<p><strong>Offline reinforcement learning</strong> removes that tether. You are
+handed a <em>fixed dataset</em> of transitions, collected earlier by
+some other policy — and that is all. No environment. No new
+experience. No trying things. Learn the best policy you can from
+what&rsquo;s already on disk.</p>
+<p>The setting matters because it is where RL meets most of the
+real world. Hospitals have years of treatment logs but you
+cannot experiment on patients. Fleets have millions of miles of
+driving data but you cannot crash cars to learn. Recommenders,
+industrial controllers, dialogue systems — everywhere there is
+abundant <em>logged</em> experience and an excellent reason not to
+explore. If RL is to work there, it must work offline.</p>
+<p>The surprise — and the subject of this final article — is that
+our best off-policy algorithms don&rsquo;t just underperform in this
+setting. Fed a perfectly good dataset, they <strong>collapse below a
+random policy</strong>, while their value estimates drift into numbers
+that are provably impossible. One small change fixes it. Both
+halves are demonstrated, from scratch, in the companion script.</p>
+<hr />
+<h2>Why naive off-policy learning fails offline</h2>
+<p>On paper, nothing stops you from running TD3 on a fixed buffer —
+replay-based methods never insisted the data be fresh. The
+failure is subtler, and it&rsquo;s called <strong>extrapolation error</strong>. It
+is a four-step doom loop:</p>
+<ol>
+<li><strong>The critic gets asked about actions the data doesn&rsquo;t
+   contain.</strong> The TD target evaluates <code>Q(s', π(s'))</code> — and <code>π</code>
+   soon proposes actions the behaviour policy never took.</li>
+<li><strong>Function approximation guesses.</strong> A network queried outside
+   its training distribution returns <em>something</em> — sometimes far
+   too high.</li>
+<li><strong>Nothing corrects the guess.</strong> Online, the agent would try
+   the action and be disappointed by reality. Offline, that
+   feedback never arrives. The error just sits there.</li>
+<li><strong>Policy improvement hunts the phantoms.</strong> The actor is
+   literally optimised to find the actions with the highest Q —
+   which, increasingly, are the fictional ones.</li>
+</ol>
+<p>Each step feeds the next: the actor drifts further off-data, the
+critic&rsquo;s guesses get wilder, the bootstrap propagates them
+everywhere. This is TD3&rsquo;s overestimation problem (Part 4) with
+the safety net removed — online, acting bounds the error;
+offline, it compounds without limit.</p>
+<p>The root cause has a name: <strong>distribution shift</strong>. The policy
+being trained is not the policy that made the data, and every
+gradient step widens the gap between the questions we ask the
+critic and the evidence it was fitted on.</p>
+<hr />
+<h2>The fix: stay where the data can vouch for you</h2>
+<p>Every successful offline RL method is, at heart, a form of
+<strong>conservatism</strong> — keep the learned policy inside the <em>support</em>
+of the dataset, where the critic&rsquo;s estimates are backed by
+evidence. The family portrait:</p>
+<ul>
+<li><strong>BCQ</strong> (Fujimoto et al., 2019) — only consider actions a
+  generative model of the dataset says are plausible.</li>
+<li><strong>CQL</strong> (Kumar et al., 2020) — penalise the critic directly for
+  assigning high values to out-of-distribution actions.</li>
+<li><strong>TD3+BC</strong> (Fujimoto &amp; Gu, 2021) — the minimalist: keep TD3
+  <em>exactly as it is</em> and add one behavioural-cloning term to the
+  actor loss.</li>
+</ul>
+<p>This article implements TD3+BC, because it makes the point with
+one line of mathematics:</p>
+<pre><code>actor loss  =  − λ · Q(s, π(s))  +  ( π(s) − a_data )²
+</code></pre>
+<p>The second term pulls the policy toward the actions actually in
+the dataset — an anchor to the data&rsquo;s support. The first term
+still <em>improves</em> the policy within that support, using the
+critic exactly as TD3 always did. The scale factor
+<code>λ = α / mean|Q|</code> keeps the two terms comparable as Q grows
+(α = 1 here). Set the BC term&rsquo;s weight to zero and you recover
+naive TD3; delete the Q term and you have pure behavioural
+cloning (supervised imitation). The interesting behaviour — and
+offline RL&rsquo;s whole promise — lives between those poles.</p>
+<hr />
+<h2>A worked example: the environment gets switched off</h2>
+<p>The companion script stages the full story on Pendulum. A
+medium-quality TD3 policy (trained briefly online) collects
+8,000 transitions <em>with its exploration noise</em> — and then the
+environment is switched off. Every learner below sees only the
+fixed arrays; the environment is used solely to grade their
+final policies.</p>
+<pre><code>DEMO 1 --- The setting: a fixed dataset, no environment access
+  Dataset size                      : 8000 transitions (40 episodes)
+  Mean episode return IN the data   :   -643.0   (what the dataset looks like)
+  The collector, without its noise  :   -259.7   (for reference)
+  (0 is a perfectly balanced pendulum; random is about -1300)
+</code></pre>
+<h3>The headline: collapse, and the one-line fix</h3>
+<p>Two learners, identical in every respect except the actor loss,
+each given 15,000 gradient steps on the same fixed data:</p>
+<pre><code>DEMO 2 --- Naive off-policy learning fails offline; TD3+BC fixes it
+  The data it learned from   : return   -643.0
+  Naive offline TD3          : return  -1473.0   (worse than random!)
+  TD3+BC                     : return   -358.2   (better than its data)
+ 
+  The critic's story (every true value on Pendulum is &lt;= 0):
+    naive : predicted Q =     +31.5   actual return =   -470.3
+    TD3+BC: predicted Q =    -164.3   actual return =   -169.2
+ 
+  Naive Q over training (sampled every 1,500 steps) -- watch it grow
+  past zero into impossible territory, with nothing to correct it:
+    +0  -22  -34  -36  -22  +1  +20  +24  +21  +16
+</code></pre>
+<p>Read the collapse carefully, because each number tells part of
+the story. Naive TD3 — the same algorithm that <em>solved</em> this
+task in Part 4 — lands at <strong>−1473, worse than acting randomly</strong>,
+despite learning from data averaging −643. And the Q trace shows
+exactly how: for the first few thousand steps the critic is
+sane (−22, −34 — fitting the data it has), and then, as the
+actor drifts onto actions the data can&rsquo;t vouch for, the estimate
+<strong>crosses zero into provably impossible territory</strong> and stays
+there. On a task where every reward is negative, the critic ends
+up promising +31.5 for a policy that actually earns −470. No
+fresh experience ever arrives to call the bluff.</p>
+<p>TD3+BC — one extra term — lands at <strong>−358, better than the data
+that taught it</strong>, and its critic stays honest: predicted −164.3
+against an actual −169.2. Anchored to the data&rsquo;s support, the
+critic&rsquo;s promises are backed by evidence, so improving against
+it actually works.</p>
+<h3>The dial from imitation to reinforcement learning</h3>
+<p>Offline RL&rsquo;s promise over plain imitation is <em>improvement</em>: the
+dataset contains noisy, mediocre behaviour, and stitching
+together its best moments should beat copying its average. The
+three-way comparison makes the trade explicit:</p>
+<pre><code>DEMO 3 --- The dial from imitation to reinforcement learning
+    BC only  (copy the data)          : return   -573.5
+    TD3+BC   (improve within the data): return   -358.2
+    naive    (trust Q everywhere)     : return  -1473.0
+ 
+    the dataset itself averaged       : return   -643.0
+    the collector, noise-free         : return   -259.7
+</code></pre>
+<p>Pure behavioural cloning faithfully reproduces the dataset,
+noise and all (−573 against the data&rsquo;s −643). Trusting the
+critic <em>everywhere</em> is catastrophic. Between them, TD3+BC uses
+the critic only where the data can support it and beats both —
+recovering most of the gap to the noise-free collector from
+noisy logs alone. That middle setting <em>is</em> offline RL.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Offline RL&rsquo;s cost profile has one defining feature: the
+environment column is <strong>zero</strong>.</p>
+<p><strong>Per gradient step</strong>: identical to TD3 — two critic updates and
+a (delayed) actor update on a minibatch, <code>O(B · W)</code>, plus the
+<code>O(B)</code> BC term, which is negligible.</p>
+<p><strong>Total training</strong>: <code>O(G · B · W)</code> for <code>G</code> gradient steps —
+pure computation against fixed arrays. No rollouts, no waiting
+on a simulator, no wear on a robot. Training is as parallel,
+repeatable, and safe as supervised learning.</p>
+<p><strong>Memory</strong>: <code>O(W + N · d)</code> — the networks plus the dataset
+itself, which plays the role the replay buffer always did,
+except it is never written to again.</p>
+<p><strong>The trade</strong>: what offline RL saves in interaction it pays in
+<em>evaluation</em>. Grading a policy honestly requires the environment
+(or careful off-policy evaluation) — the one place this
+article&rsquo;s script still touches Pendulum. In real deployments,
+deciding whether an offline-trained policy is safe to run is
+often the hardest part of the whole exercise.</p>
+<hr />
+<h2>Where this matters — and where the field went</h2>
+<p>The conservatism principle scaled far beyond Pendulum. The
+D4RL benchmarks (Fu et al., 2020) standardised the setting;
+CQL, IQL (Kostrikov et al., 2021), and TD3+BC became the
+reference baselines; and offline pre-training followed by
+cautious online fine-tuning is now a standard recipe in robotics
+— learn everything you can from logs first, spend real-world
+trials last. The same instinct — <em>don&rsquo;t let the policy stray
+into actions your data can&rsquo;t justify</em> — echoes through modern
+fine-tuning of language models, where staying close to a
+reference policy guards against reward hacking. Wherever a
+learned objective meets fixed evidence, the lesson of this
+article applies: <strong>only trust the optimiser where the data can
+vouch for it.</strong></p>
+<hr />
+<h2>Closing the series</h2>
+<p>This article completes the reinforcement learning journey — and
+the arc is worth seeing whole. A Q-table on a 48-square grid
+(Q-Learning, SARSA). A network replacing the table (DQN). The
+policy learned directly (REINFORCE), stabilised by a critic
+(A2C), made reliable by trust regions and clips (TRPO, PPO).
+Value and policy fused for continuous control (DDPG), made
+honest (TD3), made principled about exploration (SAC). Planning
+without learning at all (MCTS). And finally, learning without
+acting at all — offline RL, where the ideas met their sternest
+test: no second chances, no fresh data, just fixed evidence and
+the discipline not to wander beyond it.</p>
+<p>Twelve algorithms, every one built from scratch in NumPy, every
+claim run and printed. Nothing in this track required more than
+<code>pip install numpy</code> — and none of the ideas were ever as
+frightening as their reputations.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/09-advanced-reinforcement-learning/07-offline-reinforcement-learning/offline_rl.py"><strong>offline_rl.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python offline_rl.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in about a minute. It trains the
+behaviour policy, collects the fixed dataset, switches the
+environment off, and trains all three offline learners — naive
+TD3, TD3+BC, and pure behavioural cloning — printing the returns
+and the critic diagnostics you saw above. The headline insight
+worth pinning to the wall: <strong>off-policy is not offline — without
+fresh experience to correct it, a critic&rsquo;s out-of-distribution
+guesses go unchallenged and the actor optimises into fiction
+(here: worse than random, with a provably impossible positive
+Q); one behavioural-cloning term anchoring the policy to the
+data&rsquo;s support turns the same algorithm into one that beats the
+dataset it learned from</strong>.</p>
+<hr />
+<p><em>This is Part 7 of the Advanced Reinforcement Learning track in the Algorithms in Python series — the final article of the reinforcement learning journey. The companion script <code>offline_rl.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It builds directly on <a href="https://medium.com/p/d3a3ccf0bf44">TD3</a> (Part 4); the track also covered <a href="https://medium.com/p/81c414cc17e1">SAC</a> and <a href="https://medium.com/p/1a37862620b5">Monte Carlo Tree Search</a> on the way here.</em></p>
