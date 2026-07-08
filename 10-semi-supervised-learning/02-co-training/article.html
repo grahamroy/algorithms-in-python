@@ -1,0 +1,209 @@
+<p>Part 1 ended with self-training&rsquo;s structural flaw on full
+display: one model, promoting its own confident guesses to
+training labels, <strong>grades its own homework</strong>. When a confident
+guess was wrong, nothing in the loop could catch it — the error
+was retrained on as truth, recruited its neighbours, and
+compounded until a 93% baseline collapsed to a coin flip.</p>
+<p><strong>Co-training</strong> (Blum &amp; Mitchell, 1998) is the classic remedy,
+and its idea is disarmingly social: if one judge can&rsquo;t be
+trusted to check itself, hire a <strong>second judge with different
+information</strong>. Suppose every example naturally splits into two
+<strong>views</strong> — two feature sets, each sufficient to classify on its
+own. Blum and Mitchell&rsquo;s original: classify university web
+pages using <em>(view A)</em> the words on the page and <em>(view B)</em> the
+words in the links pointing <strong>at</strong> the page. Either view works
+alone; crucially, they fail in different places.</p>
+<p>Then train one classifier per view and let them teach each
+other: each nominates the unlabelled examples it is most
+confident about, and those pseudo-labels go into a <strong>shared
+pool</strong> — so each model spends its rounds labelling examples <em>for
+the other</em>. A wrong pseudo-label now has to fool two judges with
+different evidence. And when the judges <em>disagree</em> about an
+example, the nomination is simply vetoed — a built-in error
+detector that self-training does not have and cannot have.</p>
+<p>This article builds co-training from scratch, watches the veto
+mechanism catch dozens of would-be errors on the way to oracle
+accuracy, pits it against self-training across five datasets —
+and then breaks its famous assumption on purpose, to show
+exactly where the power comes from.</p>
+<hr />
+<h2>The algorithm</h2>
+<p>Co-training needs data whose features split into two views,
+each individually predictive. Given that:</p>
+<ol>
+<li><strong>Train</strong> one classifier per view on the labelled set.</li>
+<li><strong>Nominate</strong>: each classifier marks the unlabelled examples
+   it is confident about, with its predicted label.</li>
+<li><strong>Veto</strong>: if both classifiers nominate the same example with
+   <em>different</em> labels, discard the nomination — the judges
+   disagree, so somebody is wrong.</li>
+<li><strong>Promote</strong> the surviving nominations into the shared
+   labelled pool — each example now carries its label into
+   <em>both</em> models&rsquo; next round.</li>
+<li><strong>Retrain</strong> both and repeat until nothing new is nominated.</li>
+</ol>
+<p>The contrast with self-training is step 3 and the sharing in
+step 4. In self-training, confidence is a monologue. Here it is
+a conversation — and the argument is where the safety lives.</p>
+<h3>Why the views must be different</h3>
+<p>The theory asks for two properties: each view is <strong>sufficient</strong>
+(a good classifier exists using it alone), and the views are
+<strong>conditionally independent given the class</strong> — knowing the
+label, view A tells you nothing extra about view B. Perfect
+independence is rare in practice, but the <em>spirit</em> is what
+matters: the two views must make <strong>different mistakes</strong>. Where
+view A is ambiguous, view B usually isn&rsquo;t; each model hands the
+other exactly the labels the other could not safely have
+produced itself. Two copies of the same view give you two copies
+of the same blind spots — and, as the final experiment shows,
+precisely nothing else.</p>
+<hr />
+<h2>A worked example: two views, ten labels</h2>
+<p>The companion script makes the assumption literal. Every example
+is a hidden class plus <strong>two independent 2-D snapshots</strong> — each
+view is its own draw of the two-moons picture given that class.
+Same label, independent everything else: conditional
+independence by construction. The base classifier per view is
+Part 1&rsquo;s k-NN (k = 3, pseudo-labels need unanimous votes), so
+the only new ingredient is the second judge.</p>
+<pre><code>DEMO 1 --- The setting: 10 labels, two half-informed views
+  View A alone, 10 labels        :  82.8%
+  View B alone, 10 labels        :  88.2%
+  Both views concatenated        :  93.6%
+  Oracle (all 500 true labels)   :  99.6%
+</code></pre>
+<p>Ten labels, and each view alone is a mediocre classifier. Even
+concatenating the views only reaches 93.6%. The oracle — all 500
+true labels — sits at 99.6%.</p>
+<h3>The loop: nominations and vetoes</h3>
+<pre><code>DEMO 2 --- The loop: nominations, vetoes, and the shared pool
+    round   nom A   nom B   vetoed   added   wrong so far   accuracy
+       1      375     365      21      434          10           99.2%
+       2       44      49      11       45          10           99.8%
+       3       11       7       7        4          10           99.8%
+       4        7       6       6        1          10           99.8%
+ 
+  Co-training: 93.6% (10 labels) -&gt; 99.8%   [oracle 99.6%]
+  51 conflicting nominations vetoed; only 10 wrong labels slipped through.
+</code></pre>
+<p>Read round 1 closely, because the whole mechanism is in it. View
+A nominates 375 points; view B nominates 365. They overlap and
+they complement — between them, 434 distinct points enter the
+pool. But <strong>21 nominations disagreed</strong> and were vetoed on the
+spot: examples where one view&rsquo;s neighbourhood said class 0 and
+the other&rsquo;s said class 1. Those are precisely the ambiguous
+points self-training would have swallowed. Over the full run, 51
+conflicting nominations were caught by the veto, and only 10
+wrong labels slipped past both judges.</p>
+<p>The result: <strong>99.8% test accuracy</strong>, statistically at the oracle
+(the 0.2% &ldquo;advantage&rdquo; over it is one test point — sampling
+noise, not magic). Ten real labels, two half-informed views, and
+an argument between two classifiers did the rest.</p>
+<h3>Two judges vs one</h3>
+<p>Is the second judge actually earning its keep, or would
+self-training on <em>all</em> the features do just as well? Same k-NN,
+same threshold, same label budget, five independent datasets:</p>
+<pre><code>DEMO 3 --- Two judges vs one
+    seed   self-train (wrong)    co-train (wrong)    vetoes
+      0      93.4%  ( 29)        99.8%  ( 10)         51
+      1      99.8%  (  2)        99.0%  (  3)          4
+      2      99.6%  (  3)        98.8%  (  0)          7
+      3      94.2%  ( 36)        99.4%  ( 12)         39
+      4      92.6%  ( 35)        96.0%  ( 11)         18
+</code></pre>
+<p>The pattern is about <strong>reliability</strong>, and it&rsquo;s worth stating
+carefully. On its good days (seeds 1, 2), self-training is
+excellent — there was nothing to catch, and co-training matches
+it. But on seeds 0, 3, and 4, self-training swallowed 29–36
+wrong pseudo-labels and paid for it (92–94%). Co-training never
+had a bad day: its wrong-label count stayed at 0–12 on every
+seed — look at the veto column tracking exactly the runs where
+self-training got into trouble — and its accuracy never left the
+96–99.8% band. One judge is fine until it isn&rsquo;t; two judges with
+different evidence are consistently fine.</p>
+<h3>Breaking the assumption on purpose</h3>
+<p>Where does the power come from — the second <em>model</em>, or the
+second <em>view</em>? Replace view B with a near-copy of view A (same
+coordinates plus a whisper of noise) and run everything again:</p>
+<pre><code>    seed   self-train (wrong)    co-train (wrong)    vetoes
+      0      84.4%  ( 37)        94.2%  ( 20)          0
+      1      83.6%  ( 58)        83.6%  ( 58)          0
+      2      81.6%  ( 82)        81.4%  ( 82)          0
+</code></pre>
+<p><strong>Zero vetoes, on every seed.</strong> Two judges looking at the same
+evidence never disagree, so the error detector never fires, and
+co-training collapses into self-training — on two of the three
+seeds it admits <em>the identical wrong labels</em> (58 and 82). The
+second model was never the point. The second, <em>independent</em>
+view was the point. This is the cleanest empirical statement of
+Blum and Mitchell&rsquo;s assumption: co-training buys you exactly as
+much as your views&rsquo; errors are uncorrelated, and nothing more.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Co-training costs roughly <strong>twice self-training</strong> — two base
+models per round instead of one — plus a trivial veto check.</p>
+<p><strong>Per round</strong>: two base-model fits and two scoring passes over
+the pool (<code>O(F + U · P)</code> each), then an <code>O(U)</code> comparison of the
+nominations.</p>
+<p><strong>Total</strong>: <code>O(R · 2(F + U · P))</code> for <code>R</code> rounds — four here,
+since the shared pool grows fast when two models feed it.</p>
+<p><strong>Memory</strong>: the dataset in both views, <code>O(N · (d_A + d_B))</code>,
+plus two models. Nothing else.</p>
+<p><strong>What the second model buys</strong>: not accuracy on the good days —
+self-training matched it there — but <em>insurance</em> on the bad
+ones: an error check that fires exactly when one view&rsquo;s
+confidence goes wrong, at the price of one extra classifier.</p>
+<hr />
+<h2>When to use co-training</h2>
+<p><strong>Reach for it when your data has a natural view split.</strong> The
+classics: a web page&rsquo;s text and its inbound anchor text; a
+video&rsquo;s audio and its frames; a product&rsquo;s description and its
+reviews; a patient&rsquo;s imaging and their labs. If each view could
+classify alone and their failure modes plausibly differ, you
+have what the algorithm needs.</p>
+<p><strong>Engineer the split when it almost exists.</strong> Random feature
+splits sometimes work in practice, but the duplicate-view
+experiment is the warning: views that carry the same information
+in different clothes give zero vetoes and zero benefit. The
+question to ask is always <em>&ldquo;would these two views make different
+mistakes?&rdquo;</em></p>
+<p><strong>Skip it when</strong> the features are one indivisible view — forcing
+a split of correlated features buys the costs without the
+insurance. (Part 7, Tri-Training, gets a similar effect with
+<em>no</em> view split at all, using three models and disagreement
+alone — the idea generalises.)</p>
+<hr />
+<h2>What comes next</h2>
+<p>Co-training treats its two views as a happy accident of the
+data. Part 3, <strong>Multiview Learning</strong>, makes the views the
+central object: instead of two models trading labels, it learns
+<em>representations</em> that different views agree on — the framework
+behind canonical correlation analysis and the agreement
+principle that modern contrastive methods rediscovered at scale.
+Same instinct — independent perspectives that must concur — one
+level deeper in the stack.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/10-semi-supervised-learning/02-co-training/co_training.py"><strong>co_training.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python co_training.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in seconds. Everything is from
+scratch: the two-view data generator (independent moons per
+view), the per-view k-NN classifiers, the nomination-and-veto
+loop with its shared pool, the self-training head-to-head, and
+the duplicate-view knockout — with every pseudo-label audited
+against the hidden truth. The headline insight worth pinning to
+the wall: <strong>co-training replaces self-training&rsquo;s monologue with
+an argument — two classifiers on two independent views label
+examples for each other, and nominations they disagree on are
+vetoed, an error check that caught 51 would-be pseudo-labels on
+the way from 93.6% to oracle-level 99.8%; break the independence
+(duplicate the view) and the vetoes drop to zero, the check
+vanishes, and co-training collapses into self-training — the
+power was never the second model, it was the second view</strong>.</p>
+<hr />
+<p><em>This is Part 2 of the Semi-Supervised Learning track in the Algorithms in Python series. The companion script <code>co_training.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/eeca5accd031">Part 1</a> covered Self-Training, the one-judge loop this article adds a second judge to. Part 3 will look at Multiview Learning, where the views themselves become the object of study.</em></p>
