@@ -1,0 +1,241 @@
+<p>This article opens a new track, and the track opens with an
+awkward fact about real machine learning: <strong>labels are the
+expensive part</strong>. Data is everywhere — a hospital archives
+thousands of scans, a company logs millions of documents, a
+telescope photographs the sky all night. But <em>labelled</em> data
+means a radiologist&rsquo;s diagnosis, a lawyer&rsquo;s tag, an astronomer&rsquo;s
+classification: expert hours, per example. The result is the
+defining situation of applied ML: a <strong>handful of labelled
+examples sitting on a mountain of unlabelled ones</strong>.</p>
+<p><strong>Semi-supervised learning (SSL)</strong> is the study of making the
+mountain useful. Its central question sounds almost
+paradoxical: how can data <em>without answers</em> improve a model
+that&rsquo;s supposed to predict answers? This track works through
+the classic responses — and it starts with the simplest,
+oldest, and still most widely used of them all.</p>
+<p><strong>Self-training</strong> is machine learning&rsquo;s version of pulling
+yourself up by your bootstraps: train on the few labels you
+have, then let the model label the rest of the data <em>itself</em> —
+keeping only the predictions it is most confident about — and
+retrain on its own guesses as if they were ground truth. Done
+carefully, the model genuinely teaches itself. Done carelessly,
+it confidently teaches itself nonsense. This article builds the
+loop from scratch, watches it close most of the gap to a fully
+labelled oracle from just <strong>8 labels</strong>, and then — because the
+failure mode is the real lesson — watches the same loop destroy
+a classifier.</p>
+<hr />
+<h2>The algorithm: four steps and a threshold</h2>
+<p>Self-training is not a model; it is a <strong>wrapper</strong> around any
+classifier that can report how confident it is:</p>
+<ol>
+<li><strong>Train</strong> the base classifier on the labelled set, however
+   small.</li>
+<li><strong>Predict</strong> every point in the unlabelled pool.</li>
+<li><strong>Promote</strong> the confident predictions — probability at least
+   some threshold <code>τ</code> — into the training set as
+   <strong>pseudo-labels</strong>: the model&rsquo;s own guesses, now treated
+   exactly like real labels.</li>
+<li><strong>Retrain</strong> and repeat, until nothing new clears the bar.</li>
+</ol>
+<p>That is the whole algorithm. It dates back to the earliest days
+of the field (Yarowsky&rsquo;s 1995 word-sense bootstrapper is the
+classic citation), and its modern descendants — pseudo-labelling
+in deep learning, FixMatch&rsquo;s confidence-thresholded consistency,
+Noisy Student training — power state-of-the-art semi-supervised
+image models. The loop never looks inside the classifier; any
+model with <code>fit</code> and <code>predict_proba</code> drops in.</p>
+<p>The single load-bearing component is the <strong>confidence
+threshold</strong>. Every pseudo-label is a small bet that the model&rsquo;s
+guess is right. The threshold decides which bets get placed.</p>
+<hr />
+<h2>Why it works: confidence spreads like a rumour</h2>
+<p>Self-training leans on the <strong>cluster assumption</strong>, the quiet
+axiom under most of semi-supervised learning: <em>points in the
+same dense cluster tend to share a label</em>, so the decision
+boundary should run through the <strong>low-density gap between
+clusters</strong>, not through the middle of one.</p>
+<p>If that holds, the geometry does the teaching. The few labelled
+points sit inside clusters. The model&rsquo;s most confident
+predictions are their immediate neighbours — same cluster,
+surely same label. Promote those, and the <em>next</em> ring of points
+becomes the confident frontier. Round by round, labels spread
+outward <strong>along</strong> each cluster, the way a rumour spreads through
+a crowd — and they stop at the gap, because points near the
+boundary are near both clusters, and confidence dies there.</p>
+<p>The unlabelled data never contributes answers. What it
+contributes is <strong>shape</strong>: where the dense regions are, and where
+they end. Self-training converts shape into labels.</p>
+<hr />
+<h2>Why it fails: confirmation bias, compounding</h2>
+<p>Now run the same logic with one wrong bet. A pseudo-label that
+is confidently <em>wrong</em> enters the training set and is retrained
+on as truth. The model becomes more sure of the error — sure
+enough to mislabel the point&rsquo;s neighbours, which recruit <em>their</em>
+neighbours. Wrong labels don&rsquo;t wash out; they <strong>compound</strong>,
+exactly like the right ones do. The loop has no way to tell the
+two apart, because it grades its own homework.</p>
+<p>This is <strong>confirmation bias</strong>, and it is the tax on every
+self-training system. The threshold is the guard rail — but as
+the experiment below shows, it cannot save you from a deeper
+problem: labels that leave whole regions of a cluster closer to
+the <em>wrong</em> frontier than to the right one.</p>
+<hr />
+<h2>A worked example: 8 labels and two moons</h2>
+<p>The companion script stages everything on <strong>two moons</strong> — two
+interleaved crescents, one class each, separated by a
+low-density gap. It is the classic semi-supervised picture
+precisely because it makes the cluster assumption visible.</p>
+<p>The base classifier is k-nearest-neighbours (<code>k = 3</code>, confidence
+= the fraction of neighbours that agree, pseudo-labels require
+unanimity). kNN is chosen deliberately: its confidence is
+<strong>local by construction</strong> — far from any label, the neighbours
+disagree — which is exactly the property the loop needs. More on
+that choice below.</p>
+<pre><code>DEMO 1 --- The setting: 8 labels, 492 unlabelled points
+  Trained on the 8 labels only        :  89.8% test accuracy
+  Oracle: all 500 true labels (bound) :  99.0% test accuracy
+ 
+  The gap to close from unlabelled data alone: 9.2%
+</code></pre>
+<p>An annotator labelled four points spread along each moon —
+eight labels, full stop. Eight labels alone reach 89.8%; five
+hundred would reach 99.0%. Self-training&rsquo;s job is to close that
+gap using points with <em>no labels at all</em>.</p>
+<h3>The loop, round by round</h3>
+<pre><code>DEMO 2 --- The loop: the pseudo-label frontier expands
+    round   added   cumulative   wrong so far   test accuracy
+       1       48         48            0           89.6%
+       2      380        428            3           95.8%
+       3       54        482           11           97.2%
+       4        2        484           11           97.6%
+       5        2        486           11           97.6%
+       6        2        488           11           97.6%
+       7        1        489           11           97.6%
+ 
+  Final training set: 8 real labels + 489 pseudo-labels (11 wrong, 2.2%)
+  Test accuracy: 89.8% (labels only)  -&gt;  97.6% (self-trained)   [oracle 99.0%]
+</code></pre>
+<p>Watch the frontier work. The first 48 pseudo-labels arrive with
+<strong>zero mistakes</strong> — unanimous neighbourhoods only exist deep
+inside a single cluster. Those 48 extend the model&rsquo;s reach, and
+in round 2 the frontier sweeps up 380 more points with just 3
+errors, pushing accuracy from 89.8% to 95.8%. By round 7 the
+loop has labelled 489 of the 492 unlabelled points itself, only
+2.2% of them wrongly, and test accuracy stands at <strong>97.6%</strong> —
+most of the way from the 8-label baseline to the fully-labelled
+oracle, using nothing but the data&rsquo;s shape.</p>
+<h3>The catch: the same loop, ruined by placement</h3>
+<p>Here is the part most write-ups skip. Run the <em>identical</em>
+algorithm — same threshold, same unanimity rule, same budget of
+8 labels — but let the labels fall at <strong>random</strong> instead of
+spread along the moons:</p>
+<pre><code>DEMO 3 --- The catch: the same loop, with badly-placed labels
+    draw    labels only    self-trained    wrong pseudo-labels
+      0       80.8%          85.4%              67
+      1       56.2%          59.6%             221
+      2       93.2%          51.6%             227   &lt;- went backwards
+      3       77.0%          87.0%              53
+      4       82.0%          85.2%              69
+ 
+    mean    77.8%          73.8%
+</code></pre>
+<p>Draw 2 is the horror story: a baseline of 93.2% — <em>better</em> than
+our spread-label baseline — is dragged down to <strong>51.6%</strong>, a coin
+flip, by 227 confidently wrong pseudo-labels. With clumped
+labels, whole stretches of a moon sit closer to the <em>other</em>
+class&rsquo;s frontier than to their own. The first wrong labels land
+there, get retrained on as truth, and recruit their neighbours —
+confirmation bias, measured in a table. Averaged over the five
+draws, self-training made things <em>worse</em> (77.8% → 73.8%).</p>
+<p>Same algorithm. Same data. The difference between +7.8 points
+and catastrophe was <strong>where the 8 labels sat</strong>. Choosing which
+points deserve your labelling budget is a whole field of its own
+— it closes this track as Part 11, Active Learning.</p>
+<h3>An honest note on the base classifier</h3>
+<p>The first version of this experiment used a small neural network
+as the base classifier, and it failed in an instructive way: a
+network trained to convergence on 8 points is <strong>confidently
+wrong everywhere</strong> — its softmax probabilities saturate near 1.0
+across the entire plane, so the threshold admitted almost every
+point, errors included, in round one. Self-training is only as
+good as the confidence signal you feed it. kNN&rsquo;s
+vote-fraction confidence is honest about locality; a deep net&rsquo;s
+raw softmax usually is not, which is why deep pseudo-labelling
+methods add calibration, augmentation-consistency, or very high
+thresholds (FixMatch uses 0.95) before trusting it.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Self-training&rsquo;s costs are your base classifier&rsquo;s costs,
+multiplied by the loop.</p>
+<p><strong>Per round</strong>: one base-model fit on the current training set,
+plus one scoring pass over the remaining pool — for the kNN base
+here, <code>O(N_pool · N_train · d)</code> per round; for a parametric
+base, one <code>fit</code> plus one <code>predict_proba</code> sweep.</p>
+<p><strong>Total</strong>: <code>R</code> rounds of the above, where <code>R</code> is however long
+the frontier keeps growing (7 rounds here). The wrapper adds no
+model of its own and no memory beyond the pooled dataset,
+<code>O(N · d)</code>.</p>
+<p><strong>What you get for it</strong>: up to <code>N_unlabelled</code> extra training
+labels — here, 489 of them from 8 originals, a 60× expansion of
+the training set — at zero labelling cost. That multiplier,
+against the price of expert annotation, is the entire economic
+argument for semi-supervised learning.</p>
+<hr />
+<h2>When to use self-training</h2>
+<p><strong>Reach for it when</strong> labels are scarce, unlabelled data is
+plentiful, and the cluster assumption is plausible — your
+classes form coherent groups rather than interleaving smears.
+It is the first thing to try because it wraps whatever model you
+already have.</p>
+<p><strong>Prerequisites worth checking:</strong></p>
+<ul>
+<li><strong>A trustworthy confidence signal.</strong> Calibrated probabilities,
+  a local measure like neighbour votes, or a deep net tamed by
+  a high threshold and consistency tricks.</li>
+<li><strong>Label coverage.</strong> Your seeds should touch every major region
+  of every class — DEMO 3 is what happens when they don&rsquo;t.</li>
+<li><strong>A high threshold.</strong> Pseudo-label errors compound; be
+  stingy. Adding fewer, cleaner labels per round is almost
+  always the better trade.</li>
+</ul>
+<p><strong>Skip it when</strong> classes overlap heavily (there is no low-density
+boundary for the frontier to respect), or when your model&rsquo;s
+confidence is uninformative and can&rsquo;t be fixed.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Self-training&rsquo;s weakness is that it grades its own homework —
+one model, confirming itself. Part 2, <strong>Co-Training</strong>, is the
+classic remedy: train <em>two</em> models on two different <em>views</em> of
+the data (say, the words of a web page and the links pointing at
+it), and let each model label examples <em>for the other</em>. A
+mistake must now fool two independent judges to survive, and the
+disagreement between them becomes a built-in error check. It is
+the first of several ways this track will turn one model&rsquo;s
+self-confirmation into a conversation.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/10-semi-supervised-learning/01-self-training/self_training.py"><strong>self_training.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python self_training.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in seconds. Everything is from
+scratch: the two-moons generator, the k-NN base classifier, the
+self-training wrapper with its confidence threshold, and the
+three experiments — the gap, the expanding frontier, and the
+placement catastrophe — with pseudo-label errors audited against
+the hidden ground truth. The headline insight worth pinning to
+the wall: <strong>self-training turns a model&rsquo;s own confident
+predictions into training labels, and the cluster assumption
+makes that legitimate — confidence spreads along dense clusters
+and stops at the low-density gap, turning 8 labels into 489
+(97.6% from an 89.8% baseline, oracle 99.0%); but the loop
+grades its own homework, so a bad confidence signal or
+badly-placed seeds make errors compound instead — the same code
+that gained 8 points dropped a 93% baseline to 51% when the
+labels were unluckily placed</strong>.</p>
+<hr />
+<p><em>This is Part 1 of the Semi-Supervised Learning track in the Algorithms in Python series. The companion script <code>self_training.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. The previous track closed with <a href="https://medium.com/p/c7203745d39d">Offline Reinforcement Learning</a>. Part 2 will look at Co-Training, where two models on two views of the data label examples for each other.</em></p>

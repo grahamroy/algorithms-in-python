@@ -114,7 +114,7 @@ clear explanations and Python implementations.
 ### 10 — Semi-Supervised Learning
 | # | Algorithm | Status |
 |---|-----------|--------|
-| 1 | Self-Training | ⬜ |
+| 1 | Self-Training | ✅ |
 | 2 | Co-Training | ⬜ |
 | 3 | Multiview Learning | ⬜ |
 | 4 | Expectation Maximisation (EM) | ⬜ |
