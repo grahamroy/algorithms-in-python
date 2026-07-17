@@ -1,0 +1,219 @@
+<p>Co-training (Part 2) treated its two views as a lucky accident:
+two feature sets, two classifiers, labels traded between them.
+But hiding inside that algorithm is a deeper principle, and
+<strong>multiview learning</strong> drags it into the open: <em>if two
+independent views of the same example agree on something, that
+something is probably real.</em> View-specific quirks — the
+lighting in one sensor, the phrasing in one document field —
+don&rsquo;t survive the comparison. What survives is what the views
+<strong>share</strong>. And in most data, what paired views share is
+precisely the thing you care about.</p>
+<p>The payoff for this track is that agreement can be measured
+<strong>without a single label</strong>. You don&rsquo;t need to know what class an
+example is to check whether its two views move together. So the
+entire unlabelled mountain — useless for supervised training —
+becomes the training set for a <em>representation</em>: find the
+directions on which the views agree, project into them, and let
+your ten precious labels do their work in a space where the
+signal is finally louder than the noise.</p>
+<p>The classical engine for this is <strong>Canonical Correlation
+Analysis (CCA)</strong> — Hotelling, 1936, an algorithm older than the
+electronic computer — and this article builds it from scratch,
+uses it to turn a near-chance problem into a solved one, shows
+ten labels in the learned space <strong>beating six hundred labels in
+the raw one</strong>, and then demonstrates its one great trap:
+agreement is not the same thing as relevance.</p>
+<hr />
+<h2>The problem: the loudest directions are the wrong ones</h2>
+<p>Real features are dominated by structure that has nothing to do
+with the label. A camera&rsquo;s images vary more with lighting than
+with the object; a document&rsquo;s words vary more with author style
+than with topic. In the language of this article: each view
+contains the shared <strong>signal</strong>, buried under view-specific
+<strong>nuisance</strong> that is <em>louder</em>.</p>
+<p>That loudness is what kills the obvious tools:</p>
+<ul>
+<li><strong>Distance-based classifiers</strong> (like k-NN) compare points
+  along <em>all</em> dimensions, so the nuisance dominates every
+  distance. More labels barely help — the geometry itself is
+  wrong.</li>
+<li><strong>PCA</strong>, the default dimensionality reducer, keeps the
+  directions of <em>maximum variance</em>. But maximum variance is
+  exactly where the nuisance lives. PCA doesn&rsquo;t remove the
+  noise; it curates it.</li>
+</ul>
+<p>What we need is a criterion that distinguishes signal from
+nuisance without labels. The multiview insight: <strong>nuisance is
+view-specific, signal is shared.</strong> The lighting in view A has no
+counterpart in view B; the class does. So don&rsquo;t ask &ldquo;what is
+loud?&rdquo; — ask &ldquo;what do the views agree on?&rdquo;</p>
+<hr />
+<h2>CCA: the mathematics of agreement</h2>
+<p>Given paired views <code>A</code> and <code>B</code> (matrices with one row per
+example), CCA finds a projection direction for each view —
+<code>w_A</code>, <code>w_B</code> — maximising the <strong>correlation</strong> between the
+projected views:</p>
+<pre><code>maximise   corr( A · w_A ,  B · w_B )
+</code></pre>
+<p>Then it finds a second pair of directions, uncorrelated with the
+first, and so on — each with its <strong>canonical correlation</strong>, a
+number in [0, 1] saying how strongly the views agree along that
+axis. Correlation is computed from the data alone: <strong>no labels
+enter anywhere</strong>.</p>
+<p>The from-scratch solution (exactly what the companion script
+does): centre both views, form the covariance matrices
+<code>C_AA</code>, <code>C_BB</code>, <code>C_AB</code>; <strong>whiten</strong> each view by
+<code>C_AA^(-1/2)</code>, <code>C_BB^(-1/2)</code> so that within-view structure
+can&rsquo;t masquerade as agreement; and take the <strong>SVD</strong> of the
+whitened cross-covariance <code>C_AA^(-1/2) C_AB C_BB^(-1/2)</code>. The
+singular vectors are the canonical directions; the singular
+values are the canonical correlations. A dozen lines of NumPy.</p>
+<hr />
+<h2>A worked example: ten labels against the noise</h2>
+<p>The companion script builds the situation deliberately: 600
+example pairs, each a hidden class latent expressed in two 10-D
+views, with view-specific nuisance <strong>three times louder</strong> than
+the class signal. Ten examples are labelled.</p>
+<pre><code>DEMO 1 --- The setting: loud views, quiet signal, 10 labels
+  k-NN in raw view A (10-D), 10 labels :  53.8%
+  k-NN in PCA-2 of view A,   10 labels :  53.5%
+  k-NN in raw view A, ALL 600 labels   :  67.5%
+</code></pre>
+<p>Ten labels in the raw space: a coin flip. PCA&rsquo;s two loudest
+directions: still a coin flip — it kept the nuisance, exactly as
+advertised. And the sobering row is the third: even <strong>all 600
+labels</strong> only reach 67.5% in the raw space. When the geometry is
+wrong, labels can&rsquo;t fix it.</p>
+<h3>Agreement finds the signal</h3>
+<p>Now run CCA on the 600 <strong>unlabelled</strong> pairs:</p>
+<pre><code>DEMO 2 --- Agreement finds the signal: CCA from unlabelled pairs
+  Canonical correlations found : 0.90, 0.26   (one strong shared direction)
+  |corr| with the hidden class latent:  PCA-1 0.05   CCA-1 0.95
+ 
+    seed   10 labels, CCA space   600 labels, raw space
+      0           92.5%                 67.5%
+      1           96.0%                 78.0%
+      2           97.2%                 72.8%
+</code></pre>
+<p>Two things to read off. First, the diagnosis: CCA found <strong>one
+strong shared direction</strong> (canonical correlation 0.90; the next
+is 0.26 — noise), and that direction correlates <strong>0.95</strong> with
+the hidden class latent we generated the data from. PCA&rsquo;s top
+direction: <strong>0.05</strong>. Same data, no labels for either — one asked
+&ldquo;what is loud?&rdquo;, the other asked &ldquo;what is shared?&rdquo;, and only the
+second question has the class as its answer.</p>
+<p>Second, the headline: with the space fixed, <strong>ten labels reach
+92–97% — beating six hundred labels in the raw space on every
+seed</strong>. The unlabelled mountain did the heavy lifting: it taught
+the representation. The labels only had to draw one line in it.
+This is semi-supervised learning&rsquo;s promise in its purest form —
+and it is the shape of the modern recipe: <em>pretrain a
+representation on unlabelled data, fine-tune with a handful of
+labels.</em></p>
+<h3>The catch: agreement is not relevance</h3>
+<p>CCA finds what the views share. Nobody promised that what they
+share is what you want. Give both views a common <strong>background</strong>
+latent — same lighting, same season, same recording device —
+four times louder than the class:</p>
+<pre><code>DEMO 3 --- The catch: agreement is not relevance
+    seed   corr 1   corr 2   |comp-1 vs class|   k=1 acc    k=2 acc
+      0     0.99     0.89        0.03              48.2%      96.0%
+      1     0.99     0.91        0.04              53.2%      93.8%
+      2     0.99     0.91        0.03              50.5%      82.5%
+</code></pre>
+<p>CCA does its job perfectly — and that&rsquo;s the problem. The
+strongest shared direction (canonical correlation 0.99) is now
+the <em>background</em>: its alignment with the class is 0.03. The
+class hasn&rsquo;t vanished — it survives as <strong>component 2</strong> (still a
+healthy 0.89–0.91 correlation) — but it has been <strong>demoted</strong>,
+because CCA ranks shared directions by agreement strength, not
+by usefulness. Keep only the top component and your classifier
+is a coin flip (48–53%). Keep two, and the class is back
+(82–96%).</p>
+<p>The lesson generalises far beyond CCA: any method that learns
+representations from view agreement — including the modern
+contrastive ones — will faithfully learn <em>whatever the views
+share</em>. Know what that is before you trust it, and don&rsquo;t
+truncate the representation harder than your knowledge of it.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>CCA is refreshingly cheap — closed-form linear algebra, no
+iterations, no learning rates.</p>
+<p><strong>Covariances</strong>: <code>O(n · d²)</code> for <code>n</code> pairs of <code>d</code>-dimensional
+views — one pass over the data.</p>
+<p><strong>Whitening and SVD</strong>: <code>O(d³)</code> — on the <em>feature</em> dimension, not
+the sample count. For views of tens or hundreds of dimensions
+this is microseconds.</p>
+<p><strong>Projecting</strong> a new point: <code>O(d · k)</code> — a matrix multiply.
+After that, your classifier works in <code>k</code> dimensions instead of
+<code>d</code>, which makes the downstream few-label model cheaper too.</p>
+<p><strong>Labels consumed: zero.</strong> The representation is trained
+entirely on unlabelled pairs — that column is the entire reason
+this article is in a semi-supervised track.</p>
+<hr />
+<h2>From Hotelling to CLIP</h2>
+<p>The agreement principle did not stay in 1936. <strong>Kernel CCA</strong>
+made the projections nonlinear; <strong>Deep CCA</strong> (Andrew et al.,
+2013) replaced them with neural networks trained to maximise the
+same correlation. And the modern self-supervised wave rediscovered
+the principle at scale: contrastive methods like SimCLR
+manufacture two &ldquo;views&rdquo; of an image by augmentation and train a
+network to make their representations agree; <strong>CLIP</strong> treats an
+image and its caption as two views of one thing and aligns them
+— hundreds of millions of unlabelled pairs teaching a
+representation, exactly the CCA recipe with the linear algebra
+swapped for transformers. When you next hear &ldquo;pretrain on
+unlabelled data, fine-tune with a few labels,&rdquo; you are hearing
+this article&rsquo;s DEMO 2, industrialised.</p>
+<hr />
+<h2>When to use multiview methods</h2>
+<p><strong>Reach for CCA (and its descendants) when</strong> your examples come
+in natural pairs — two sensors, two modalities, image and text,
+before and after — and unlabelled pairs are plentiful while
+labels are scarce. It is the cheapest serious representation
+learner there is.</p>
+<p><strong>Check what the views share.</strong> DEMO 3 is the standing warning:
+shared background structure (same device, same season, same
+site) will out-rank the signal if it is louder. Either remove
+known confounders first, or keep enough canonical components to
+survive the demotion.</p>
+<p><strong>Mind the linearity.</strong> Plain CCA finds linear agreement; if the
+shared structure is nonlinear, you need the kernel or deep
+variants — same principle, heavier machinery.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Parts 1–3 all shared one worldview: train a classifier, be
+careful about what you feed it. Part 4 changes the worldview:
+<strong>Expectation-Maximisation (EM)</strong> treats the missing labels as
+<em>missing data</em> in a probabilistic model — positing how the data
+was generated, then alternating between guessing the hidden
+labels (softly, with probabilities) and refitting the model to
+those guesses. It is the statistician&rsquo;s answer to
+semi-supervision, it is the algorithm self-training was quietly
+approximating all along, and it comes with the field&rsquo;s most
+famous convergence guarantee.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/10-semi-supervised-learning/03-multiview-learning/multiview.py"><strong>multiview.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python multiview.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in under a second. Everything is
+from scratch: the two-view generator with its loud nuisance, CCA
+via whitening and SVD, PCA for the contrast, and the three
+experiments — with the learned directions audited against the
+hidden generating latent. The headline insight worth pinning to
+the wall: <strong>what two views agree on is probably real — CCA finds
+the directions along which paired views correlate, using no
+labels at all, so the unlabelled mountain trains the
+representation and ten labels finish the job (92–97%, beating
+600 labels in the raw space, where PCA&rsquo;s loudest-direction
+prior aligned 0.05 with the class against CCA&rsquo;s 0.95); but
+agreement is ranked by strength, not relevance — a shared
+background can take the top slot and demote the signal, so know
+what your views share besides the thing you care about</strong>.</p>
+<hr />
+<p><em>This is Part 3 of the Semi-Supervised Learning track in the Algorithms in Python series. The companion script <code>multiview.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. <a href="https://medium.com/p/6f581df978ff">Part 2</a> covered Co-Training, which trades labels between views; this article learns from the views directly. Part 4 will look at Expectation-Maximisation, where the missing labels become missing data in a generative model.</em></p>

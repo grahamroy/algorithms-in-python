@@ -116,7 +116,7 @@ clear explanations and Python implementations.
 |---|-----------|--------|
 | 1 | Self-Training | ✅ |
 | 2 | Co-Training | ✅ |
-| 3 | Multiview Learning | ⬜ |
+| 3 | Multiview Learning | ✅ |
 | 4 | Expectation Maximisation (EM) | ⬜ |
 | 5 | Label Propagation | ⬜ |
 | 6 | Graph-Based Methods | ⬜ |
