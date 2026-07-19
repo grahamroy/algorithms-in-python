@@ -1,0 +1,198 @@
+<p>Every method in this track so far has <em>reasoned</em> its way from
+few labels to many — promoting confident guesses, trading
+nominations between judges, learning shared representations,
+fitting generative stories. <strong>Label propagation</strong> (Zhu &amp;
+Ghahramani, 2002) does something almost embarrassingly more
+direct: it treats labels as a <strong>fluid</strong> and lets them flow.</p>
+<p>The bet is the <strong>smoothness assumption</strong> in its purest form:
+<em>nearby points should share a label</em>. No distributions, no
+parameters, no classifier — just geometry. Build a graph
+connecting every point to its nearest neighbours, labelled and
+unlabelled alike; pour the known labels in at their points; and
+let them diffuse along the edges until the whole graph is
+covered. Dense regions conduct labels; empty regions insulate.
+The low-density gap between classes — the same gap every
+article in this track has leaned on — stops the flow <em>by
+construction</em>, because a gap is precisely where there are no
+edges.</p>
+<p>This article builds the algorithm from scratch, watches the
+flood spread hop by hop over a thousand points, and then settles
+a score: the five randomly-placed label draws that made Part 1&rsquo;s
+self-training collapse — one of them to a coin flip — get
+revisited, on exactly the same data. All five come back at ~98%.</p>
+<hr />
+<h2>The recipe</h2>
+<p>Three steps, and the third has a beautiful closed form.</p>
+<p><strong>1. Build the graph.</strong> Connect each point (labelled or not) to
+its <code>k</code> nearest neighbours, and weight each edge by similarity —
+a Gaussian kernel <code>w_ij = exp(−‖x_i − x_j‖² / 2σ²)</code>, so closer
+neighbours pull harder. Row-normalise the weights into a
+transition matrix <code>P</code>: each point&rsquo;s row says how much it listens
+to each neighbour.</p>
+<p><strong>2. Let the labels flow.</strong> Give every labelled point a one-hot
+belief vector and every unlabelled point nothing. Then repeat:</p>
+<pre><code>F  ←  P · F          every point averages its neighbours' beliefs
+F[labelled]  ←  known labels        (the clamp)
+</code></pre>
+<p>Beliefs spread outward from the labelled points like heat
+through a plate whose labelled points are held at fixed
+temperatures. The clamp is essential: the known labels are
+boundary conditions, never overwritten.</p>
+<p><strong>3. Read off the equilibrium.</strong> The iteration converges to the
+<strong>harmonic solution</strong>: every unlabelled point&rsquo;s belief is
+exactly the weighted average of its neighbours&rsquo;. It has a lovely
+probabilistic reading — a point&rsquo;s score for class A is <em>the
+probability that a random walk starting there reaches a
+labelled A point before any other label</em> — and a closed form,</p>
+<pre><code>F_unlabelled  =  (I − P_uu)⁻¹ P_ul · Y_labelled
+</code></pre>
+<p>one linear solve, which is what the companion script uses for
+its final answers. No learning rate, no epochs, no model: the
+graph and the labels determine everything.</p>
+<hr />
+<h2>A worked example: watching the flood</h2>
+<p>The companion script uses the exact two-moons pipeline of
+Part 1 — same generator, same master seed — with 1,000 points in
+the graph (the 500-point pool plus 500 held-out test points, all
+unlabelled except <strong>8</strong>), each point tied to its 7 nearest
+neighbours with <code>σ = 0.05</code>.</p>
+<pre><code>DEMO 1 --- The flood: labels spread hop by hop along the graph
+    iteration   points reached (of 1,000)
+         1               69
+         2              161
+         3              295
+         5              545
+        10              857
+        20             1000
+ 
+  Equilibrium (closed-form harmonic solution): 98.2% accuracy
+</code></pre>
+<p>The table is the mechanism. Eight labelled points touch 69
+neighbours on the first hop, 161 by the second, and the wave
+rolls down the arcs of both moons until every one of the 1,000
+points has been reached by iteration 20. The flood follows the
+data&rsquo;s shape — along the crescents, never across the gap,
+because the gap has no edges to carry it. Equilibrium: <strong>98.2%</strong>
+on the 500 held-out points, from 8 labels.</p>
+<h3>The rescue: Part 1&rsquo;s catastrophe, revisited</h3>
+<p>Part 1 ended with a warning table: self-training with 8
+<em>randomly-placed</em> labels averaged 73.8%, and one unlucky draw
+fell from a 93.2% baseline to 51.6% — a coin flip — as the
+frontier spread from badly-seeded positions and compounded its
+own errors. Same data, same five draws, label propagation:</p>
+<pre><code>DEMO 2 --- The rescue: Part 1's catastrophic label draws, revisited
+    draw   self-training (Part 1)   label propagation
+      0           85.4%                98.2%
+      1           59.6%                98.6%
+      2           51.6%                98.4%
+      3           87.0%                98.4%
+      4           85.2%                97.8%
+     mean          73.8%                98.3%
+</code></pre>
+<p>Every draw, including the catastrophe, lands between 97.8% and
+98.6%. The reason is structural, not luck: self-training&rsquo;s
+frontier grows outward <em>from wherever the seeds sit</em>, so bad
+placement means bad geometry from round one. Label propagation&rsquo;s
+reach is set by the <strong>graph&rsquo;s</strong> shape — a label planted anywhere
+on a moon flows along that moon&rsquo;s edges to all of it. Placement
+stops mattering because the data&rsquo;s connectivity, not the seeds&rsquo;
+positions, decides where influence travels.</p>
+<h3>The graph is the model</h3>
+<p>That power has a precise price, and the third experiment states
+it three ways. Same algorithm, same 8 labels — only the graph
+construction changes:</p>
+<pre><code>DEMO 3 --- The graph IS the model: three ways to break it
+    graph                                  accuracy   unreached
+    sharp local graph (k=7, sigma=0.05)      98.2%         0
+    blurry edges     (k=7, sigma=0.5)        86.4%         0
+    gap erased  (full graph, sigma=1.5)      50.0%         0
+    fragmented       (k=2, sigma=0.05)       73.2%       618
+</code></pre>
+<p>Blur the kernel (<code>σ = 0.5</code>) and the few edges that happen to
+cross the gap carry as much weight as on-moon edges — labels
+leak, 86.4%. Connect everything to everything with a huge
+bandwidth and the gap ceases to exist as far as the flow is
+concerned: an exact coin flip. Starve the graph (<code>k = 2</code>) and it
+fragments into islands — <strong>618 of the 1,000 points are never
+reached by any label at all</strong>. Label propagation has no opinions
+of its own. It faithfully diffuses over whatever graph you hand
+it, which makes graph construction — <code>k</code>, <code>σ</code>, the distance
+metric — the entire modelling decision, and the first place to
+look when it misbehaves.</p>
+<p>One more honest caveat: this method is <strong>transductive</strong>. It
+labels the points <em>in the graph</em> — there is no classifier left
+over to apply to tomorrow&rsquo;s data. (The script&rsquo;s test points were
+inside the graph as unlabelled nodes; that is the standard
+protocol. For new points, you either re-solve or attach them to
+the graph&rsquo;s labelled output with a nearest-neighbour rule.)</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Label propagation&rsquo;s costs live in the graph, not in any model.</p>
+<p><strong>Building the graph</strong>: <code>O(n² · d)</code> for pairwise distances (the
+dominant cost at our scale; tree- or hash-based neighbour search
+cuts it for large <code>n</code>), then <code>O(n · k)</code> edges survive.</p>
+<p><strong>Iterative flow</strong>: <code>O(n · k)</code> per sweep on the sparse graph —
+each point averages <code>k</code> neighbours — for however many sweeps the
+flood needs (20 reached everything here).</p>
+<p><strong>Closed form</strong>: one linear solve in the unlabelled block,
+<code>O(n_u³)</code> dense — exact, and preferable at moderate scale;
+conjugate-gradient solvers make it near-linear on sparse graphs.</p>
+<p><strong>No training, no parameters</strong>: like MCTS in the RL track, this
+is computation at <em>decision time</em> over a structure, not learning
+of weights. The flip side is transduction — the answers are for
+these points, and new data means new computation.</p>
+<hr />
+<h2>The graph family</h2>
+<p>Label propagation is the front door to a whole family that
+Part 6 explores properly. <strong>Label spreading</strong> (Zhou et al.,
+2004) uses the normalised graph Laplacian and a soft clamp —
+labelled points can bend slightly, which helps with label
+noise. The <strong>harmonic function / Gaussian random field</strong> view
+(this article) connects to electrical networks: beliefs are
+voltages, labelled points are batteries, edge weights are
+conductances. And the modern echo: <strong>graph neural networks</strong> do
+learned, feature-aware message passing over exactly this kind of
+structure — label propagation with parameters. scikit-learn
+ships <code>LabelPropagation</code> and <code>LabelSpreading</code>; what they do is
+what you just built.</p>
+<p><strong>Reach for it when</strong> distances between examples are meaningful,
+the classes form connected regions, and you want a strong
+transductive answer with zero training. <strong>Hesitate when</strong> the
+graph would need to span disconnected class regions (islands
+starve), or features are too high-dimensional for raw distances
+to mean much — fix the representation first (Part 3&rsquo;s lesson),
+then propagate.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 6, <strong>Graph-Based Methods</strong>, widens this article into the
+family view: the graph Laplacian as a smoothness penalty, label
+spreading&rsquo;s soft clamp, and graph regularisation as a framework
+where propagation, spectral clustering, and modern
+message-passing all turn out to be the same idea wearing
+different coats.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/10-semi-supervised-learning/05-label-propagation/label_propagation.py"><strong>label_propagation.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python label_propagation.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in a few seconds. Everything is
+from scratch: the k-NN Gaussian graph, the clamped iterative
+flow with its flood trace, the closed-form harmonic solve, the
+Part 1 comparison on identical label draws, and the three graph
+ablations. The headline insight worth pinning to the wall:
+<strong>label propagation treats labels as a fluid on a similarity
+graph — flow to equilibrium with the known labels clamped, and
+each unlabelled point ends up at the harmonic average of its
+neighbours (equivalently: where a random walk from it first hits
+a label); the flood follows the data&rsquo;s connectivity rather than
+the seeds&rsquo; placement, which is why the five badly-placed draws
+that broke self-training (mean 73.8%, worst 51.6%) all land at
+~98% on the same data — but the graph IS the model: blur it,
+over-connect it, or fragment it, and the same flow fails three
+different ways</strong>.</p>
+<hr />
+<p><em>This is Part 5 of the Semi-Supervised Learning track in the Algorithms in Python series. The companion script <code>label_propagation.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. The rescue in DEMO 2 revisits <a href="https://medium.com/p/eeca5accd031">Part 1</a>&rsquo;s self-training on identical data; <a href="https://medium.com/p/dc0679e0bf4e">Part 4</a> covered the generative alternative. Part 6 widens this into the graph-based family.</em></p>
