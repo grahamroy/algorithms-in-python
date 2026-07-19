@@ -119,7 +119,7 @@ clear explanations and Python implementations.
 | 3 | Multiview Learning | ✅ |
 | 4 | Expectation Maximisation (EM) | ✅ |
 | 5 | Label Propagation | ✅ |
-| 6 | Graph-Based Methods | ⬜ |
+| 6 | Graph-Based Methods | ✅ |
 | 7 | Tri-Training | ⬜ |
 | 8 | Virtual Adversarial Training (VAT) | ⬜ |
 | 9 | Deep Generative Models for SSL | ⬜ |

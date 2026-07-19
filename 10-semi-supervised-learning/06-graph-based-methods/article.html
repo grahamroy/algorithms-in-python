@@ -1,0 +1,185 @@
+<p>Part 5 built one algorithm: labels flowing over a similarity
+graph to a harmonic equilibrium. It worked beautifully — and it
+is one member of a family. This article is the family portrait,
+and the family has a single patriarch: the <strong>graph Laplacian</strong>,</p>
+<pre><code>L  =  D − W
+</code></pre>
+<p>the diagonal degree matrix minus the weight matrix. On paper it
+looks like bookkeeping. Its power is one identity:</p>
+<pre><code>fᵀ L f   =   ½ · Σ_ij  w_ij (f_i − f_j)²
+</code></pre>
+<p>Take <em>any</em> labelling <code>f</code> of the graph&rsquo;s nodes and this quadratic
+form returns its <strong>roughness</strong> — the total squared disagreement
+across every edge, weighted by how strongly the endpoints are
+connected. Smooth labellings (neighbours agree) score low;
+jagged ones score high. One number, computable for anything you
+might write on the graph.</p>
+<p>That number turns the whole graph family into variations on a
+single sentence — <em>make <code>fᵀLf</code> small without contradicting what
+you know</em> — and this article demonstrates three of its faces:
+the meter itself, the spectrum that finds classes with <strong>zero</strong>
+labels, and a practical trick Part 5 couldn&rsquo;t do: using the
+graph to <strong>audit the labels themselves</strong> and catch the poisoned
+ones.</p>
+<hr />
+<h2>The family, in one objective</h2>
+<p>Write the family&rsquo;s shared goal as</p>
+<pre><code>minimise    fᵀ L f    +    μ · (fidelity to the known labels)
+</code></pre>
+<p>and the members differ only in how hard they hold the labels:</p>
+<ul>
+<li><strong>Harmonic propagation</strong> (Part 5) takes <code>μ → ∞</code>: the known
+  labels are <em>clamped</em>, immovable boundary conditions, and the
+  smoothest completion is the harmonic solution the flood
+  converged to.</li>
+<li><strong>Label spreading</strong> (Zhou et al., 2004) takes <code>μ</code> finite — a
+  <em>soft clamp</em>. Known labels can bend if the graph pushes back
+  hard enough. One dial, <code>α</code>, sets the balance between trusting
+  the graph and trusting the annotator, and the solution is again
+  one linear system (the script uses its closed form).</li>
+<li><strong>Spectral methods</strong> take the labels away entirely: minimise
+  <code>fᵀLf</code> subject only to <code>f</code> being balanced and non-trivial —
+  and that constrained minimisation <em>is</em> an eigenvector problem.</li>
+</ul>
+<p>Same objective, three settings of one knob: infinite trust,
+finite trust, no labels at all.</p>
+<hr />
+<h2>A worked example, in three acts</h2>
+<p>The stage is Part 5&rsquo;s exact graph: 1,000 two-moons points,
+each tied to its 7 nearest neighbours with Gaussian weights.</p>
+<h3>Act 1: the meter</h3>
+<pre><code>DEMO 1 --- The Laplacian is a smoothness meter
+    the true labelling                :     57.9
+    the truth with  2 points flipped  :     99.8
+    the truth with 10 points flipped  :    181.6
+    a random labelling                :   3510.1
+</code></pre>
+<p>The true class labelling scores 57.9 — almost all its
+disagreement coming from the handful of noisy points near the
+gap. Flip just <strong>two points out of a thousand</strong> and the meter
+nearly doubles: each flipped point now disagrees with its entire
+neighbourhood, and the quadratic form bills every one of those
+edges. A random labelling reads sixty times rougher. This
+sensitivity is the family&rsquo;s entire engine: the truth is
+<em>detectably</em> smooth, so smoothness is worth optimising.</p>
+<h3>Act 2: the spectrum knows</h3>
+<p>Minimising <code>fᵀLf</code> with no labels at all (excluding the trivial
+all-ones labelling) is, by the standard variational argument, an
+eigenvector problem — and the smoothest non-trivial direction is
+the second eigenvector of the (normalised) Laplacian, the
+<strong>Fiedler vector</strong>:</p>
+<pre><code>DEMO 2 --- The spectrum knows: classes from ZERO labels
+  Smallest eigenvalues: 0.0000, 0.0002, 0.0007, 0.0010
+  Sign of the Fiedler vector vs the true classes: 96.7%
+</code></pre>
+<p>Read that carefully: the sign pattern of one eigenvector —
+computed from the graph alone, before any label exists — agrees
+with the true classes on <strong>96.7%</strong> of the points. The class
+structure was <em>in the graph all along</em>; labels only tell you
+which half is called what. (If this feels familiar, it should:
+it is spectral clustering, from the unsupervised track,
+resurfacing as the zero-label endpoint of the same smoothness
+family. The tiny second eigenvalue against a visible gap to the
+third is the spectrum&rsquo;s way of saying &ldquo;this graph has exactly
+two loosely-joined pieces.&rdquo;)</p>
+<h3>Act 3: the audit</h3>
+<p>Soft clamping earns its keep in a way accuracy tables don&rsquo;t
+show. Because label spreading&rsquo;s solution is a linear system, a
+<strong>leave-one-out</strong> question becomes a cheap rank-one update: for
+each labelled point, <em>remove its own clamp and ask what belief
+the graph would hand it from everything else.</em> If the graph&rsquo;s
+answer contradicts the given label, somebody should look at that
+label again.</p>
+<p>The experiment: 40 labelled points, of which <strong>4 are poisoned</strong>
+(flipped) — and the annotator doesn&rsquo;t know which. Rank all 40 by
+graph disagreement:</p>
+<pre><code>DEMO 3 --- The audit: the graph proofreads your labels
+    trial   ranks of the 4 poisoned labels (of 40)
+      0          [1, 2, 3, 5]
+      1          [1, 2, 6, 7]
+      2          [1, 2, 3, 4]
+</code></pre>
+<p>All twelve poisoned labels across the three trials land in the
+top 7 of 40 — trial 2 is a perfect 1-2-3-4. The stragglers at
+ranks 6–7 are instructive rather than embarrassing: they are
+poisoned seeds that happen to sit <em>near each other</em>, each
+vouching for the other&rsquo;s lie — exactly how label noise hides in
+real datasets, where one confused annotator mislabels a whole
+neighbourhood of similar examples. The practical recipe is
+free: before trusting a labelled dataset, propagate, rank the
+labels by disagreement with their own neighbourhood, and read
+the top of the list.</p>
+<p>One honest note from the experiments behind this article: on
+this dataset the <em>accuracy</em> difference between hard and soft
+clamping is small in every condition tested — the family&rsquo;s
+practical dividends here are the spectrum and the audit, not a
+robustness gap between clamps.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Everything in the family is linear algebra on one sparse matrix.</p>
+<p><strong>The meter</strong>: <code>fᵀLf</code> costs <code>O(edges)</code> — one pass over the
+graph, <code>O(n · k)</code> here.</p>
+<p><strong>The spectrum</strong>: a full eigendecomposition is <code>O(n³)</code>, but only
+the few smallest eigenvectors are needed, and sparse iterative
+eigensolvers get them in roughly <code>O(edges)</code> per iteration —
+spectral partitions of million-node graphs are routine.</p>
+<p><strong>Spreading / propagation</strong>: one sparse linear solve —
+<code>O(n_u³)</code> dense, near-linear with conjugate-gradient methods on
+sparse graphs.</p>
+<p><strong>The audit</strong>: with the inverse (or a factorisation) in hand,
+each leave-one-out check is a rank-one update — <code>O(1)</code> extra per
+labelled point. Forty audits cost essentially nothing beyond the
+solve you already did.</p>
+<hr />
+<h2>From Laplacians to message passing</h2>
+<p>The modern echo, one paragraph, because the lineage is direct.
+<strong>Graph neural networks</strong> compute, at each layer, a learned
+transformation of each node&rsquo;s neighbourhood average — which is
+to say, they apply the same neighbourhood-smoothing operator
+this family is built on, interleaved with learned feature maps.
+Simplified GNN variants (SGC) are <em>literally</em> powers of the
+normalised adjacency applied to features; &ldquo;over-smoothing&rdquo;, the
+famous deep-GNN failure, is this article&rsquo;s flow run too long,
+converging toward the Fiedler-dominated equilibrium. The
+Laplacian family isn&rsquo;t a historical curiosity under the GNN era
+— it is the linear core the learned machinery wraps.</p>
+<p><strong>Reach for these methods when</strong> similarity is meaningful and
+classes form connected regions: fast, parameter-light, and — as
+Act 3 shows — useful even as a data-quality tool before any
+model is trained. <strong>The standing caveat is Part 5&rsquo;s</strong>: the graph
+is the model, and every conclusion — meter, spectrum, audit — is
+only as good as the edges.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 7, <strong>Tri-Training</strong>, returns to the classifier-ensemble
+thread with a twist on Part 2: it gets co-training&rsquo;s error-check
+<em>without needing two views at all</em> — three classifiers, trained
+on bootstrap samples, where any two agreeing can teach the
+third. Disagreement as a resource, view requirements dropped.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/10-semi-supervised-learning/06-graph-based-methods/graph_methods.py"><strong>graph_methods.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python graph_methods.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in a couple of seconds.
+Everything is from scratch: the k-NN Gaussian graph, the
+Laplacian and its quadratic form, the normalised-Laplacian
+eigendecomposition for the Fiedler split, label spreading&rsquo;s
+closed form, and the rank-one leave-one-out audit. The headline
+insight worth pinning to the wall: <strong>the graph family is one
+objective — minimise the Laplacian roughness <code>fᵀLf = ½Σw_ij(f_i−f_j)²</code>
+under some loyalty to the known labels — with hard clamping
+giving Part 5&rsquo;s propagation, soft clamping giving label
+spreading, and no labels at all giving the spectrum, whose
+Fiedler vector already carries 96.7% of the class structure;
+and because the truth is detectably smooth (two flipped points
+nearly double the meter), the graph can even proofread your
+labels — ranking all twelve poisoned labels into the top 7 of
+40, with the escapees hiding exactly the way real label noise
+does: next to each other</strong>.</p>
+<hr />
+<p><em>This is Part 6 of the Semi-Supervised Learning track in the Algorithms in Python series. The companion script <code>graph_methods.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It generalises <a href="https://medium.com/p/56d8ae72db5a">Part 5</a>&rsquo;s label propagation into the Laplacian family. Part 7 will look at Tri-Training, which wins co-training&rsquo;s error check without needing views.</em></p>
