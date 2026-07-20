@@ -1,0 +1,192 @@
+<p>Co-training (Part 2) earned this track&rsquo;s best safety mechanism —
+two judges with different evidence, vetoing each other&rsquo;s
+mistakes — and paid for it with a steep entry requirement: your
+data must split into two views, each sufficient to classify
+alone. Web pages with their inbound links qualify. Most datasets
+don&rsquo;t.</p>
+<p><strong>Tri-training</strong> (Zhou &amp; Li, 2005) recovers the spirit of that
+check with no views at all, by changing where the diversity
+comes from. Instead of two models on two feature sets, train
+<strong>three models on three bootstrap resamples</strong> of the labelled
+data — an unstable base learner turns small resampling
+differences into genuinely different classifiers. Then arrange
+them into a rotating classroom: for each classifier, the <em>other
+two</em> act as its teachers, and every unlabelled point the
+teachers <strong>agree</strong> on becomes a lesson for the student.</p>
+<p>But agreement alone is not enough — that was the hard lesson of
+Part 1, and this article measures it again. Tri-training&rsquo;s real
+contribution is <strong>the gate</strong>: a measurable condition, checked
+every round, that only lets a batch of pseudo-labels in if the
+teachers&rsquo; estimated error keeps a classical noise bound
+shrinking. Agreement proposes; the gate disposes. The companion
+script builds all of it, revisits Part 1&rsquo;s five catastrophic
+label draws for a third time — and is honest about the one draw
+where even three judges get it wrong.</p>
+<hr />
+<h2>The algorithm</h2>
+<p><strong>Diversity from bootstraps.</strong> Each of the three classifiers
+starts from a bootstrap resample of the labelled set (draw <code>n</code>
+examples <em>with replacement</em>). A resample of 8 points omits
+roughly a third of them, so the three training sets — and, with
+an unstable learner like 1-NN, the three classifiers — genuinely
+differ. This is bagging&rsquo;s trick, redeployed: instability, which
+supervised learning fights, is here the <em>fuel</em> that makes
+&ldquo;agreement between models&rdquo; mean something.</p>
+<p><strong>The teaching rule.</strong> In each round, for classifier <code>i</code>, let
+its two peers label the whole unlabelled pool. The points they
+agree on form the candidate batch <code>L_i</code>, labelled with the
+peers&rsquo; shared prediction. A wrong lesson now requires <em>both</em>
+teachers to make the same mistake.</p>
+<p><strong>The gate.</strong> Before the student accepts the batch:</p>
+<ol>
+<li>Measure the teachers&rsquo; error <code>e_i</code> — on the labelled set,
+   restricted to points where they agree (the only place truth
+   is known).</li>
+<li>Accept only if <code>e_i</code> fell since last round <strong>and</strong> the
+   product <code>e_i · |L_i|</code> — the expected number of wrong labels
+   ingested — shrinks relative to the last accepted round. If
+   the batch is too big for that, <strong>subsample</strong> it down until
+   the bound holds.</li>
+</ol>
+<p>That product rule comes straight from classical learning theory
+(the Angluin–Laird noise bound): training on noisy labels is
+survivable if the noise mass shrinks as the sample grows. The
+gate turns that theorem into an admission policy, using only
+quantities you can compute.</p>
+<p><strong>Prediction</strong> is a majority vote of the three.</p>
+<hr />
+<h2>A worked example: the classroom in action</h2>
+<p>The stage is, deliberately, the same as Parts 1 and 5: the exact
+two-moons data and the exact five random 8-label draws that
+broke self-training. The base learner is 1-NN — chosen for its
+instability, which is what makes the bootstraps diverse.</p>
+<pre><code>DEMO 1 --- The mechanism: two teachers, one student, one gate
+    round 1: classifier 0 accepts 274 pseudo-labels  (teachers' error estimate 0.000)
+    round 1: classifier 1 accepts 435 pseudo-labels  (teachers' error estimate 0.000)
+    round 1: classifier 2 accepts   3 pseudo-labels  (teachers' error estimate 0.143)
+    round 2: classifier 2 accepts 469 pseudo-labels  (teachers' error estimate 0.000)
+ 
+  Majority vote of the three: 96.0% test accuracy
+  (the same three bootstraps WITHOUT unlabelled data: 89.6%)
+</code></pre>
+<p>Watch classifier 2. In round 1 its teachers disagree with the
+truth on 14.3% of the labelled points where they agree — so the
+gate lets in a batch of just <strong>3</strong> (subsampled to keep
+<code>e·|L|</code> bounded). One round later the teachers have improved,
+the estimate drops, and the gate opens to 469. That is the
+admission policy working as designed: batch size tracks
+measured teacher quality. Result: 96.0%, against 89.6% for the
+identical ensemble without the unlabelled pool.</p>
+<h3>The scoreboard, third visit</h3>
+<pre><code>DEMO 2 --- The scoreboard: Part 1's five hard draws, revisited
+    draw   self-training (Part 1)   bagged baseline   tri-training
+      0           85.4%                89.6%           96.0%
+      1           59.6%                83.6%           74.6%
+      2           51.6%                67.4%           80.6%
+      3           87.0%                77.2%           94.4%
+      4           85.2%                82.0%           85.4%
+     mean          73.8%                80.0%           86.2%
+</code></pre>
+<p>The fair comparison is the middle column — the <em>same</em> three
+bootstrap 1-NNs, trained on the labels alone — because ensembling
+by itself is already worth +6 points over Part 1&rsquo;s lone
+self-trainer. Tri-training adds another <strong>+6 on top</strong> from the
+unlabelled pool, and four of the five draws improve, two of them
+dramatically (77.2 → 94.4; 67.4 → 80.6).</p>
+<p>And then there is draw 1, which this article refuses to hide:
+tri-training <em>loses</em> to its own baseline there, 83.6 → 74.6. The
+cause is visible in DEMO 1&rsquo;s diagnostics: the gate&rsquo;s error
+estimate is computed on <strong>eight labelled points</strong>, and eight
+points make a noisy voltmeter — note those round-1 estimates of
+exactly 0.000, an obviously optimistic reading from a tiny
+sample. Sometimes the voltmeter waves a bad batch through. Three
+judges shrink the risk of confident nonsense; they do not end
+it. (Part 5&rsquo;s label propagation, which replaces judged opinions
+with geometry, scored 98.6% on this same draw — every mechanism
+in this track has a domain where it is the right one.)</p>
+<h3>The gate is the point</h3>
+<p>Same three judges, same agreement rule — but accept <em>every</em>
+agreed batch, no error check, no subsampling:</p>
+<pre><code>DEMO 3 --- The gate is the point: remove it and watch
+    draw   tri (gated)   tri (no gate)      pseudo-labels used
+      0       96.0%        94.8%           1181 gated vs  5310 ungated
+      1       74.6%        78.0%           1170 gated vs  5210 ungated
+      2       80.6%        81.8%           1151 gated vs  5086 ungated
+      3       94.4%        77.4%           1467 gated vs  5898 ungated
+      4       85.4%        83.2%           1327 gated vs  5606 ungated
+</code></pre>
+<p>Ungated, each classifier swallows essentially the whole pool
+every round — five thousand pseudo-labels of unchecked quality —
+and the mean drops from 86.2% to 83.0%, with draw 3 collapsing
+by seventeen points. The gate admits roughly a fifth as many
+labels, each batch only when the measured noise bound improves.
+(Honesty again: the flood gets lucky on two draws — noise
+sometimes cancels — but on average, and at its worst, it costs.)
+Agreement finds candidate labels; the gate decides whether they
+are safe to eat.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Tri-training is three self-trainings plus bookkeeping.</p>
+<p><strong>Per round</strong>: three base-model fits and three scoring passes
+over the pool (<code>O(3(F + U · P))</code>), plus the gate&rsquo;s error
+measurement on the labelled set — negligible.</p>
+<p><strong>Total</strong>: rounds until no gate opens (a handful here — the
+gate is also a natural stopping rule, something plain
+self-training lacks).</p>
+<p><strong>Memory</strong>: three training sets, <code>O(3 · N · d)</code> worst case.</p>
+<p><strong>What the third model buys</strong>: teachers for every student
+without needing views, a majority vote at prediction time, and —
+through the gate — a <em>measurable</em> admission policy with a
+classical noise bound behind it. The price is 3× the base
+model&rsquo;s cost and the standing caveat that the gate is only as
+good as the labelled set it measures on.</p>
+<hr />
+<h2>The ensemble thread</h2>
+<p>Tri-training sits at the junction of two ideas this series keeps
+meeting. From <strong>bagging</strong> it takes bootstrap diversity and
+majority voting; from <strong>co-training</strong> it takes peer teaching and
+agreement as evidence. Its descendants push both directions:
+co-forest extends the committee to a full random forest;
+multi-view co-regularisation blends it back toward Part 2; and
+the modern deep-learning echoes — co-teaching for noisy labels,
+consistency between differently-augmented students — reuse the
+same triangle of <em>diverse peers checking each other&rsquo;s homework</em>
+with networks in place of 1-NNs. The gate&rsquo;s lesson travels
+furthest of all: whatever proposes your pseudo-labels, admit
+them on a <strong>measured</strong> error budget, not on confidence alone.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Every method so far has manufactured its safety from other
+models — more judges, more views, more graphs. Part 8, <strong>Virtual
+Adversarial Training (VAT)</strong>, manufactures it from the <em>loss
+function</em>: perturb each unlabelled point in the direction that
+most changes the model&rsquo;s prediction, and penalise that change.
+No teachers, no committees — just a smoothness demand enforced
+adversarially, and one of the strongest ideas to survive into
+the deep-learning era of semi-supervision.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/10-semi-supervised-learning/07-tri-training/tri_training.py"><strong>tri_training.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python tri_training.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in a couple of seconds.
+Everything is from scratch: the bootstrap ensemble of 1-NN
+classifiers, the rotating teacher-student rounds, the
+Angluin-Laird-style gate with its subsampling rule, the majority
+vote, and the three experiments on Part 1&rsquo;s exact data. The
+headline insight worth pinning to the wall: <strong>tri-training gets
+co-training&rsquo;s peer-checking without views — three
+bootstrap-diversified classifiers where any two agreeing teach
+the third — but its real engine is the gate, which admits a
+pseudo-label batch only when the teachers&rsquo; measured error keeps
+the expected noise mass <code>e·|L|</code> shrinking; on the five draws
+that broke self-training (73.8%) it reaches 86.2% against its
+own bagged baseline&rsquo;s 80.0%, loses one draw honestly to its
+eight-point error estimate, and without the gate drops three
+points while swallowing five times the pseudo-labels</strong>.</p>
+<hr />
+<p><em>This is Part 7 of the Semi-Supervised Learning track in the Algorithms in Python series. The companion script <code>tri_training.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It delivers <a href="https://medium.com/p/6f581df978ff">Part 2</a>&rsquo;s error check without the view requirement, on <a href="https://medium.com/p/eeca5accd031">Part 1</a>&rsquo;s exact data. Part 8 will look at Virtual Adversarial Training, where the smoothness demand moves into the loss function itself.</em></p>
