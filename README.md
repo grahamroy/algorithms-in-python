@@ -122,7 +122,7 @@ clear explanations and Python implementations.
 | 6 | Graph-Based Methods | ✅ |
 | 7 | Tri-Training | ✅ |
 | 8 | Virtual Adversarial Training (VAT) | ✅ |
-| 9 | Deep Generative Models for SSL | ⬜ |
+| 9 | Deep Generative Models for SSL | ✅ |
 | 10 | Transductive SVM | ⬜ |
 | 11 | Active Learning | ⬜ |
 
