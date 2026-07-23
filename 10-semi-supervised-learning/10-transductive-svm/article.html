@@ -1,0 +1,190 @@
+<p>Every assumption this track has leaned on — smoothness,
+clusters, the low-density gap — has an oldest, bluntest
+statement, and it belongs to Vapnik: <strong>the decision boundary is
+a street, and the street should be wide and empty</strong>. The
+supervised SVM already believes this; it just can&rsquo;t see most of
+the town. Trained on eight labelled points it finds the widest
+street <em>between the points it can see</em> — and parks it, with
+perfect confidence, on top of five hundred points it cannot.</p>
+<p>The <strong>Transductive SVM</strong> (Vapnik, 1998; made practical by
+Joachims, 1999) repairs that with one loss term and one
+constraint. Every unlabelled point gets the <em>hat loss</em>
+<code>max(0, 1 − |f(x)|)</code>: a penalty for standing inside the street,
+whichever side of it the point calls home. No pseudo-labels, no
+graph, no generative story, no adversary — the margin itself,
+the same idea that powered the supervised SVM, becomes the
+semi-supervised engine:</p>
+<pre><code>min   λ/2 ||w||²  +  C_l · hinge(labelled)  +  C_u · hat(unlabelled)
+ 
+subject to:  the pool's predicted class balance is pinned
+             to the labelled ratio
+</code></pre>
+<p>That constraint is not decoration. Without it the cheapest
+empty street is <em>around</em> the town — shove everyone to one side
+and nobody is inside. With it, the only way to empty the street
+is to move the street.</p>
+<p>The price of this elegance is printed in the loss itself: the
+hat has two downhill directions per point — push it left or
+push it right — so the objective is <strong>non-convex</strong>, the single
+property that shaped every practical TSVM ever built. This
+article builds one from scratch, watches it move the boundary
+into the gap, and then maps the valleys it can fall into — and
+the label-free trick that picks the right one.</p>
+<hr />
+<h2>Making it practical</h2>
+<p><strong>The model.</strong> An SVM needs a kernel for moons, so the script
+builds an RBF kernel machine the cheap modern way: <strong>random
+Fourier features</strong> — 200 random cosines whose inner products
+approximate the Gaussian kernel — with <code>f(x) = w·φ(x) + b</code>
+trained by subgradient descent (Adam). A bonus that matters
+later: each restart <em>redraws</em> the random feature map, handing
+the non-convex search genuinely different starting geometry.</p>
+<p><strong>The balance pin.</strong> The bias <code>b</code> is not a trained parameter.
+Every step it is set analytically so the pool&rsquo;s mean output
+equals the labelled class ratio — the constraint holds
+<em>exactly</em>, and the one-class collapse is simply not in the
+search space.</p>
+<p><strong>The annealing.</strong> Following Joachims, the unlabelled weight
+<code>C_u</code> climbs from 1/128th of full strength to full over eight
+stages: the labelled street forms first, the unlabelled
+evidence bends it gradually.</p>
+<p><strong>The selection.</strong> Non-convex objectives are handled the
+honest way: several restarts, keep the <em>lowest objective</em>.
+Note what that selection does <strong>not</strong> need: labels. An emptier
+street is visibly emptier — you can score it on unlabelled data
+alone.</p>
+<hr />
+<h2>A worked example: eight labels and a full street</h2>
+<p>The stage is Part 1&rsquo;s exact two-moons data and its five random
+8-label draws.</p>
+<pre><code>DEMO 1 --- The supervised street: margin over 8 points
+    draw:    73.8%   84.2%   84.2%   88.6%   87.2%    mean 83.6%
+    inside:  44.0%   42.4%   29.6%   44.6%   17.4%    mean 35.6%
+</code></pre>
+<p>The supervised SVM is the track&rsquo;s strongest baseline yet
+(kernel smoothness alone beats Part 8&rsquo;s supervised network,
+83.6% vs 77.4%). But look at the second row: <strong>a third of the
+pool is standing inside a margin that is supposed to be
+empty</strong>. The labels cannot object — they are all comfortably
+outside it. Only the unlabelled points know, and nothing asks
+them.</p>
+<h3>Ask them</h3>
+<pre><code>DEMO 2 --- The transductive street: everyone must clear it
+    draw   supervised   transductive     chosen restart
+      0        73.8%        98.6%         J = 0.0474
+      1        84.2%        98.4%         J = 0.0297
+      2        84.2%        93.6%         J = 0.0459
+      3        88.6%        98.4%         J = 0.0256
+      4        87.2%        98.0%         J = 0.0269
+     mean       83.6%        97.4%
+ 
+    street occupancy of the chosen solutions: 2.6%  4.2%  7.0%  3.4%  4.0%
+</code></pre>
+<p>Mean 97.4%, every draw at 93.6% or better, and the street
+occupancy collapses from a third of the pool to a few percent.
+Draw 0 — the draw that capped VAT at 90.8% and the Gaussian
+story at 83.8% — hits 98.6%. The boundary moved into the gap
+for the most literal reason in this track: <strong>the gap is the
+only place a wide empty street fits</strong>. That puts the TSVM in
+the track&rsquo;s top tier — 97.4% against the VAE mixture&rsquo;s 98.0%
+and label propagation&rsquo;s ~98.3% — achieved with nothing but a
+margin and a constraint.</p>
+<h3>The hat is not a bowl</h3>
+<pre><code>DEMO 3 --- The hat is not a bowl: six restarts, three streets
+    objective J     test accuracy
+      0.0474          98.6%   &lt;-- chosen
+      0.0558          88.6%
+      0.0617          98.0%
+      0.0779          76.0%
+      0.0899          61.2%
+      0.0914          65.6%
+</code></pre>
+<p>Draw 0&rsquo;s six restarts land in three distinct basins: the true
+gap (~98%), a street that shears through one moon (~76%), and
+worse (~61–66%). This is the non-convexity made visible —
+<em>trust a single run and you inherit its valley</em>: the six runs
+average 81.3%, spanning 61.2% to 98.6%. But sort the table by
+its first column: the objective ranks the basins almost
+perfectly, because emptier streets genuinely score lower.
+Label-free selection recovers the 98.6%.</p>
+<p>Two more measured facts complete the honest picture. Unpin the
+balance and the street&rsquo;s population drifts wherever its valley
+leads — across the same six restarts the pool splits 38–71%
+positive (accuracy 52.2–98.6%) against a true 50/50; the pin
+costs one line and deletes that whole axis of failure. And
+Joachims&rsquo; annealing schedule, kept in the script for fidelity,
+measured as <em>neutral</em> on a problem this small — restarts plus
+objective selection already explore what the schedule exists
+to protect. At scale, with stochastic gradients and no budget
+for six restarts, it earns its keep.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p><strong>One training run</strong> is plain full-batch subgradient descent:
+<code>O(N · D)</code> per epoch for <code>N</code> pool points and <code>D</code> random
+features — every term, the balance pin included, rides the same
+<code>P·w</code> product. <strong>The full algorithm</strong> multiplies by epochs and
+restarts: <code>O(R · E · N · D)</code>. The script&rsquo;s 6 restarts × 6,000
+epochs × 500 points finish in about half a minute in NumPy.</p>
+<p><strong>Against its own history</strong>: Joachims&rsquo; original label-switching
+TSVM solves a full SVM QP inside every iteration of a
+combinatorial outer loop — exact but brutal; the gradient
+version here (in the spirit of Chapelle &amp; Zien&rsquo;s ∇TSVM) trades
+exactness for a smooth ride at <code>O(N · D)</code> a step.</p>
+<p><strong>The knobs</strong>: kernel width <code>σ</code> (0.35 here — the street must be
+drawable at the data&rsquo;s scale), <code>C_l</code> vs <code>C_u</code> (how loudly
+labels outrank geometry), and the restart count <code>R</code> — the only
+knob that exists purely because the hat is not a bowl.</p>
+<hr />
+<h2>A word about the name</h2>
+<p>Vapnik&rsquo;s framing was philosophical: <em>&ldquo;do not solve a more
+general problem as an intermediate step&rdquo;</em> — if you only need
+labels for <em>these</em> points, ask for exactly that
+(<strong>transduction</strong>), not for a rule over all space
+(<strong>induction</strong>). The irony of the practical TSVM is that it
+delivers both: the optimisation is transductive — those 500
+specific unlabelled points shaped the street — but <code>w</code> and <code>b</code>
+survive it, so a full inductive classifier walks out for free
+(DEMO 2&rsquo;s scores are on untouched test data). Modern
+literature often calls the same objective <strong>S3VM</strong>,
+semi-supervised SVM, precisely to drop the philosophical
+baggage. And the family tree runs forward from here: swap the
+hat loss&rsquo;s hard hinge for a smooth confidence penalty on a
+neural network and you are within arm&rsquo;s reach of entropy
+minimisation and Part 8&rsquo;s VAT — the low-density street, one
+generation later, enforced by an adversary instead of stated
+as an objective.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 11 closes the track with <strong>Active Learning</strong> — the
+question every part so far has carefully stepped around. All
+ten methods accepted their eight labels as given, a random
+draw&rsquo;s worth of luck; the whole scoreboard&rsquo;s variance came from
+<em>which</em> eight. Active learning asks the only question left:
+if you may choose what gets labelled, which eight points buy
+the most?</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/10-semi-supervised-learning/10-transductive-svm/tsvm.py"><strong>tsvm.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python tsvm.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in about half a minute.
+Everything is from scratch: the random Fourier feature kernel
+machine, the hinge and hat subgradients, the exact balance pin
+through the bias, the annealing schedule, and the restart
+selection. The headline insight worth pinning to the wall:
+<strong>the TSVM states semi-supervised learning as pure geometry —
+punish any unlabelled point standing inside the margin street
+(the hat loss) while pinning the class balance, and the street
+relocates to the low-density gap because that is the only
+place a wide empty street fits: 83.6% becomes 97.4% on eight
+labels, with a third of the pool inside the supervised street
+and 3–7% inside the transductive one — and the price is
+non-convexity, paid honestly with restarts whose objective
+values rank their valleys almost perfectly, so the right
+street can be chosen without ever touching a label</strong>.</p>
+<hr />
+<p><em>This is Part 10 of the Semi-Supervised Learning track in the Algorithms in Python series. The companion script <code>tsvm.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It is evaluated on <a href="https://medium.com/p/eeca5accd031">Part 1</a>&rsquo;s exact label draws, states as optimisation the low-density idea that <a href="https://medium.com/p/5ad699fa2684">Part 8</a>&rsquo;s VAT enforced with an adversary, and sits beside <a href="https://medium.com/p/59e50bb71435">Part 9</a>&rsquo;s VAE mixture in the track&rsquo;s top tier. Part 11, the track finale, will look at Active Learning.</em></p>
