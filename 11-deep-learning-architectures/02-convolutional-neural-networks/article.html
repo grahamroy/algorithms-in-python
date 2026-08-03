@@ -1,0 +1,165 @@
+<p>Part 1 closed on a strange promise: shuffle the pixels of every
+image <em>identically</em> and a multi-layer perceptron learns exactly
+as well. To the MLP, an image was never a picture — just 196
+unrelated columns of numbers that happen to arrive together. It
+cannot know that pixel 37 sits beside pixel 38, and it spends
+its capacity rediscovering, position by position, facts a human
+would call obvious.</p>
+<p>Images have two kinds of structure the MLP is blind to.
+<strong>Nearby pixels are related</strong> — edges, strokes, textures are
+local events. And <strong>the same pattern means the same thing
+wherever it appears</strong> — a vertical stroke at the top-left is
+the same stroke at the bottom-right. The <strong>convolutional
+layer</strong> (LeCun, 1989) writes both facts directly into the
+architecture:</p>
+<ul>
+<li><strong>Locality</strong>: each output neuron looks at a small window —
+  3×3 here — instead of the whole image.</li>
+<li><strong>Weight sharing</strong>: <em>one</em> kernel slides across every
+  position. Nine weights, reused at all 144 locations. What is
+  learned here is known everywhere.</li>
+</ul>
+<p>Add ReLU, then 2×2 <strong>max-pooling</strong> — a layer that answers &ldquo;did
+the feature occur anywhere in this neighbourhood?&rdquo; and throws
+away exactly where — and you have the stack that read your
+cheques in the 1990s and won ImageNet in 2012.</p>
+<p>The companion script builds it all by hand — the im2col trick
+that turns convolution into one matrix multiply, the backward
+pass with argmax routing through the pool, audited against
+central differences at <strong>2.59e-10</strong> — and then runs the
+experiment Part 1 promised.</p>
+<hr />
+<h2>The stage: geometry or nothing</h2>
+<p>Every image is 14×14, containing a single 7-pixel stroke —
+<strong>horizontal, vertical, or diagonal</strong> — at a random position,
+under noise. Three classes, all lighting exactly 7 pixels, so
+total brightness carries no signal at all. The <em>only</em> learnable
+thing is geometry: which way does the stroke run, wherever it
+happens to be?</p>
+<hr />
+<h2>A worked example: the shuffle, the budget, the kernels</h2>
+<h3>The shuffle test</h3>
+<p>One fixed random permutation of the 196 pixel positions,
+applied to every image — train and test alike. Neighbourhoods
+are destroyed; information is perfectly intact.</p>
+<pre><code>DEMO 1 --- The shuffle test: does geometry matter to you?
+                     MLP [64]    CNN
+    original:         92.2%     99.8%
+    shuffled:         91.0%     62.0%
+</code></pre>
+<p>The MLP does not notice — 92.2% to 91.0%, the promised
+non-event, because to it pixels were always unrelated columns
+and the shuffle just renames them. The CNN&rsquo;s advantage
+<strong>evaporates</strong>: 99.8% to 62.0%. Its architecture <em>assumes</em>
+nearby-means-related, and the shuffle makes the assumption
+false. This is the honest statement of what an architectural
+prior is: a bet about the data, paid out only when true. (The
+62% remainder is the CNN scraping the few pixel pairs the
+permutation happened to leave adjacent.)</p>
+<h3>Sample efficiency: the prior is prepaid data</h3>
+<pre><code>DEMO 2 --- Sample efficiency: the prior is prepaid data
+    train imgs    MLP [64]    CNN
+        15        36.0%     48.2%
+        45        50.8%     65.8%
+       150        59.7%     97.2%
+       600        95.8%     99.8%
+</code></pre>
+<p>At 150 training images the CNN leads by ~38 points, and the
+mechanism is visible in the failure: an MLP must <em>see</em> a stroke
+at a position to know it there — each location is a separate
+fact to learn — while the CNN&rsquo;s shared kernel learns the stroke
+once, for everywhere. By 600 images the MLP has bought with
+data what the CNN was given by design. An architectural prior
+is data you don&rsquo;t have to collect.</p>
+<h3>Locality vs sharing — and the kernels nobody asked for</h3>
+<p>The conv layer makes two separable promises, so the script
+separates them: a <strong>locally-connected</strong> network keeps the same
+3×3 wiring but gives every location a <em>private</em> kernel —
+locality without sharing.</p>
+<pre><code>DEMO 3 --- Locality vs sharing
+    architecture                 params    test acc
+    dense MLP [64]              12,803     92.2%
+    local 3x3, unshared         11,243     98.8%
+    conv 3x3, shared               947     99.8%
+</code></pre>
+<p>Locality alone is worth +6.6 points — small windows see strokes
+cleanly. Sharing then does more with <strong>12× fewer parameters</strong>,
+because every window&rsquo;s experience trains the same nine weights:
+the kernel effectively sees the whole dataset at every
+position. 947 parameters beat 12,803.</p>
+<p>And what did those nine weights become?</p>
+<pre><code>    filter 0  (norm 2.82):        filter 6  (norm 2.58):
+      +1.12  -0.76  -0.52           +1.27  -1.00  -0.83
+      +1.39  -0.67  -0.69           -1.06  +0.95  +0.09
+      +1.60  -0.58  -0.29           -0.85  +0.21  +0.73
+</code></pre>
+<p>Filter 0 is a <strong>vertical-edge detector</strong> — a strongly positive
+left column against negative neighbours. Filter 6 lights up
+along the diagonal. Nobody asked for edge detectors; they are
+what gradient descent discovers when nine weights must serve
+144 positions at once. Full-scale networks rediscover
+Gabor-like filters the same way — and biological V1 arrived at
+the same answer first, which remains one of deep learning&rsquo;s
+most pleasing coincidences.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>A conv layer&rsquo;s compute is <code>O(N · P · k² · F)</code> — positions ×
+window × filters — but its <em>parameters</em> are just <code>O(k² · F)</code>,
+independent of image size. That decoupling is the whole
+economics of the architecture: cost scales with the image,
+knowledge doesn&rsquo;t. The im2col trick trades memory (each pixel
+copied k² times) to turn the slide into one matrix multiply —
+the same trade every deep learning framework makes under the
+name of speed. Pooling is free of parameters entirely; its
+backward pass just routes gradient to whichever input won the
+max.</p>
+<hr />
+<h2>From cheques to ImageNet — and what dethroned it</h2>
+<p>The lineage is compact: LeNet-5 reading American cheques
+(1998), a long winter, then AlexNet (2012) — the same
+architecture, three orders of magnitude more compute — cutting
+ImageNet error nearly in half and starting the modern era.
+ResNet (2015) made CNNs effectively arbitrarily deep by letting
+layers learn <em>corrections</em> rather than transformations. Today&rsquo;s
+vision transformers relax the convolutional prior — with enough
+data, ViTs <em>learn</em> locality rather than assume it, and at
+internet scale that flexibility wins. But DEMO 2 is the
+counterweight: below some data threshold the prepaid prior is
+unbeatable, which is why CNNs still rule small-data vision,
+edge devices, and medical imaging. The lesson generalises: the
+less data you have, the more your architecture should already
+know.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 3, <strong>Recurrent Neural Networks</strong>, takes weight sharing to
+its other natural habitat: <em>time</em>. A sequence has the same two
+structures an image has — local order matters, and the same
+pattern means the same thing whenever it occurs. The RNN slides
+one network along a sequence the way a kernel slides across an
+image — and meets a harder version of Part 1&rsquo;s vanishing
+gradient the moment the sequence gets long.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/11-deep-learning-architectures/02-convolutional-neural-networks/cnn.py"><strong>cnn.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python cnn.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in about a minute. Everything is
+from scratch: the stroke-image generator, im2col convolution
+with its full backward pass, argmax-routed max-pooling, the
+locally-connected control, and the startup gradient audit.
+The headline insight worth pinning to the wall: <strong>a
+convolutional layer is a bet written into the wiring — nearby
+pixels are related (3×3 windows) and patterns mean the same
+thing everywhere (nine shared weights serving 144 positions) —
+and the bet pays exactly when true: 947 parameters beat 12,803
+(99.8% vs 92.2%), a ~38-point lead at 150 training images, and
+learned kernels that became edge detectors nobody requested —
+while shuffling the pixels, which falsifies the bet, costs the
+CNN its entire advantage (99.8% → 62.0%) and costs the MLP
+nothing at all</strong>.</p>
+<hr />
+<p><em>This is Part 2 of the Deep Learning Architectures track in the Algorithms in Python series. The companion script <code>cnn.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It measures the pixel-shuffle claim that closed <a href="https://medium.com/p/9c0d36baa5bc">Part 1</a>, whose MLP returns here as the baseline. Part 3 will look at Recurrent Neural Networks.</em></p>
