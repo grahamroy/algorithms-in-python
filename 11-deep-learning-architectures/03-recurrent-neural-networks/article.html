@@ -1,0 +1,170 @@
+<p>Part 2 shared nine weights across every position of an image.
+This part points the same idea down the other axis of the
+world: <strong>time</strong>. A sequence has exactly the structure an image
+has — local order matters, and the same pattern means the same
+thing whenever it occurs — so the recurrent network shares one
+cell across every step:</p>
+<pre><code>h_t = tanh( x_t·Wx  +  h_{t-1}·Wh  +  b )
+</code></pre>
+<p>The same <code>Wx</code> and <code>Wh</code> at step 3 and step 300. The hidden state
+<code>h</code> is the network&rsquo;s running summary of everything so far —
+its memory — and the parameter count never grows with sequence
+length, for the same reason Part 2&rsquo;s kernel never grew with the
+image. Training is <strong>backpropagation through time</strong>: unroll the
+recurrence, then walk Part 1&rsquo;s chain rule backwards along the
+sequence.</p>
+<p>And right there, the section&rsquo;s recurring villain returns with a
+sharper knife. Part 1&rsquo;s vanishing gradient decayed through a
+<em>stack</em> of layers — six storeys, ×25,000 attenuation. In a
+recurrent network, every step of <em>distance</em> between cause and
+consequence multiplies the error signal by the same squashing
+recurrent Jacobian — forty steps means forty multiplications,
+by construction. This article measures what that does, finds
+that the failure is not a slope but a <strong>cliff</strong>, and then opens
+up the machine built to survive it: the <strong>LSTM</strong>.</p>
+<hr />
+<h2>The stage: carry one fact through the noise</h2>
+<p>The task is <strong>recall</strong>: the <em>first</em> symbol of a sequence (one
+of four) is the label; then <code>T</code> distractor symbols follow. To
+answer at the end, the network must carry exactly one fact
+across <code>T</code> steps of noise. <code>T</code> is a dial for <em>distance between
+evidence and verdict</em> — and nothing else about the task changes
+as it grows. Both cells&rsquo; backward passes are audited against
+central differences at startup (2.48e-10 and 2.56e-10 — Part
+1&rsquo;s ritual, applied to BPTT).</p>
+<hr />
+<h2>A worked example: the control, the cliff, the cell</h2>
+<h3>One cell, any length</h3>
+<pre><code>DEMO 1 --- One cell, any length
+    vanilla RNN :   796 params   test 100.0%     (recall, T=10)
+    LSTM        :  2884 params   test 100.0%
+ 
+    control -- answer is the LAST symbol, T=40:
+    vanilla RNN :  99.5%      LSTM :  98.8%
+</code></pre>
+<p>At <code>T=10</code> both cells are perfect, with parameter counts a
+fraction of Part 1&rsquo;s smallest useful MLP — and independent of
+<code>T</code>. The control is the important line: a <strong>forty-step</strong>
+sequence whose answer sits at the <em>end</em> is no obstacle at all
+(99.5% for the vanilla cell). Length is not the problem. Hold
+that thought.</p>
+<h3>The wall is distance, and it is a cliff</h3>
+<pre><code>DEMO 2 --- The wall is distance, and it is a cliff
+    distance T    vanilla RNN    LSTM
+       20          100.0%      100.0%
+       30          100.0%       98.8%
+       40           24.0%      100.0%
+</code></pre>
+<p>No graceful decline: the vanilla RNN is <em>perfect</em> at thirty
+steps of distance and at <strong>chance</strong> at forty (four symbols —
+25%). Combined with the control, the verdict is exact: the
+vanilla cell fails precisely when information must <em>survive</em>
+distance, not when sequences are merely long.</p>
+<p>The mechanism is visible before training even begins — the
+error signal&rsquo;s norm as it travels backwards to <code>t = 1</code> on the
+<code>T = 40</code> task, at initialisation:</p>
+<pre><code>    step:      t=40      t=30      t=20      t=10      t=1
+    RNN :    2.4e-02   3.7e-03   8.5e-04   2.2e-04   8.3e-05
+    LSTM:    1.7e-02   5.9e-03   3.0e-03   1.4e-03   6.2e-04
+</code></pre>
+<p>The RNN&rsquo;s signal arrives at the first step attenuated ~300×;
+the LSTM&rsquo;s arrives an order of magnitude stronger — <em>with
+untrained, default gates</em>. Adam can rescale a small gradient,
+but it cannot restore the information a squashing Jacobian has
+destroyed forty times over; past the cliff, what reaches <code>t=1</code>
+is as much noise as signal.</p>
+<h3>Inside the cell</h3>
+<p>The LSTM (Hochreiter &amp; Schmidhuber, 1997) survives the trip by
+refusing to multiply by a matrix at all. It keeps a second
+state — the <strong>cell</strong> <code>c</code> — updated <em>additively</em>, with three
+learned gates deciding what to forget, write, and reveal:</p>
+<pre><code>i, f, o = sigmoid gates      g = tanh(candidate)
+c_t = f * c_{t-1} + i * g        &lt;-- the additive highway
+h_t = o * tanh(c_t)
+</code></pre>
+<p>Walk the backward pass along the cell path and the step-to-step
+factor is just <code>f</code> — elementwise, a learned number near 1 — not
+a squashing matrix. The script initialises the forget bias at
++1, so newborn LSTMs are <em>biased to remember</em> (that is where
+DEMO 2&rsquo;s order-of-magnitude head start came from), and training
+pushes the units it relies on higher:</p>
+<pre><code>DEMO 3 --- forget gates on the trained T=40 recall LSTM
+    at init  : mean 0.74   top-3 units [0.795 0.785 0.784]
+    trained  : mean 0.79   top-3 units [0.888 0.874 0.872]
+</code></pre>
+<p>And then the honest boundary, because gates are not magic.
+<strong>Parity</strong> of 40 bits needs no long-range storage — one bit,
+updated every step — but its credit assignment is brutal: every
+input matters and flipping any one flips the answer.</p>
+<pre><code>    parity, T = 40:  vanilla RNN 47.8%   LSTM 49.2%   (chance: 50%)
+</code></pre>
+<p>Both cells fail. Gates cure <em>vanishing gradients</em>; they do not
+cure every hard lesson a long horizon can teach. Knowing the
+difference is knowing what an LSTM actually is: not memory
+magic — an architectural guarantee that the error signal
+survives the trip.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Everything is linear in sequence length — <code>O(T · H²)</code> per
+sequence forward, the same backwards (Part 1&rsquo;s law holds
+through time) — with parameters <code>O(H²)</code>, independent of <code>T</code>.
+The LSTM pays exactly 4× the vanilla cell (four gate blocks
+through one fused matrix). The costs that actually shaped
+history are the other two: BPTT must <em>store</em> every timestep&rsquo;s
+activations (<code>O(T · H)</code> memory), and the computation is
+<strong>inherently sequential</strong> — step <code>t</code> cannot start before step
+<code>t−1</code> finishes, on any hardware, at any budget. Remember that
+last one; it is the door the next two articles walk through.</p>
+<hr />
+<h2>The GRU, and where the recurrence went</h2>
+<p>The <strong>GRU</strong> (Cho et al., 2014) is the LSTM&rsquo;s streamlined
+sibling — two gates instead of three, no separate cell, ~25%
+fewer parameters, and on most mid-sized tasks the same
+accuracy; the principle (gated, additive state) is identical.
+For a decade this family <em>was</em> sequence modelling: translation,
+speech, language models. What ended the monopoly was not
+accuracy but the Big-O table&rsquo;s last line — sequential
+computation cannot be parallelised across a 10,000-GPU
+cluster, and a mechanism that pays <code>O(T)</code> steps of latency to
+relate the first token to the last was outrun by one that pays
+<code>O(1)</code>. But recurrence is not history: its <code>O(H)</code> inference
+state — constant memory regardless of context length — is
+exactly why state-space models (Mamba and kin) have brought
+the recurrent idea roaring back for long-context work. The
+wheel is still turning.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 4, <strong>Attention Mechanisms</strong>, removes the middleman
+entirely. The RNN relates step 40 to step 1 by <em>surviving</em> 39
+hops of state; attention lets step 40 simply <em>look at</em> step 1
+— every position queries every other directly, distance
+becomes irrelevant, and the cliff in DEMO 2 becomes
+unbuildable. The price is a new Big-O row — <code>O(T²)</code> — and the
+subject of the two most consequential architecture articles in
+this section.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/11-deep-learning-architectures/03-recurrent-neural-networks/rnn.py"><strong>rnn.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python rnn.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in 3–4 minutes. Everything is
+from scratch: both cells, full backpropagation through time,
+the forget-bias initialisation, Adam, the startup gradient
+audits, and the recall and parity stages. The headline insight
+worth pinning to the wall: <strong>a recurrent network is weight
+sharing across time — one cell, any length, 796 parameters —
+and its failure mode is distance, not length: perfect recall
+through 30 steps of noise, chance at 40, while a 40-step task
+with the answer at the end stays trivial; the LSTM survives
+because its cell state updates additively and its backward
+pass multiplies by a learned forget gate near 1 instead of a
+squashing matrix 40 times — an order-of-magnitude stronger
+signal at t=1 before training even starts — but gates cure
+vanishing gradients, not every long horizon: 40-bit parity
+defeats both cells honestly</strong>.</p>
+<hr />
+<p><em>This is Part 3 of the Deep Learning Architectures track in the Algorithms in Python series. The companion script <code>rnn.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It carries <a href="https://medium.com/p/9c0d36baa5bc">Part 1</a>&rsquo;s vanishing gradient into the time dimension and applies <a href="https://medium.com/p/6f860b54044f">Part 2</a>&rsquo;s weight sharing to sequences. Part 4 will look at Attention Mechanisms.</em></p>
