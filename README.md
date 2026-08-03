@@ -129,7 +129,7 @@ clear explanations and Python implementations.
 ### 11 — Deep Learning Architectures
 | # | Algorithm | Status |
 |---|-----------|--------|
-| 1 | Multi-Layer Perceptron (MLP) | ⬜ |
+| 1 | Multi-Layer Perceptron (MLP) | ✅ |
 | 2 | Convolutional Neural Networks (CNNs) | ⬜ |
 | 3 | Recurrent Neural Networks (RNN / LSTM / GRU) | ⬜ |
 | 4 | Attention Mechanisms | ⬜ |
