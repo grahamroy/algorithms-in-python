@@ -1,0 +1,163 @@
+<p>Nothing in this article is new. That is the entire point of it.</p>
+<p>The <strong>transformer</strong> (Vaswani et al., 2017 — <em>Attention Is All
+You Need</em>) is not another architecture in the sequence this
+section has been building; it <em>is</em> the sequence this section
+has been building, bolted together:</p>
+<ul>
+<li><strong>Token embeddings + sinusoidal positions</strong> — Part 4, where
+  order had to be smuggled back into a set.</li>
+<li><strong>Multi-head causal self-attention</strong> — Part 4&rsquo;s soft lookup,
+  multiplied: every position now queries every earlier one, and
+  several heads run in parallel so different specialists can
+  emerge.</li>
+<li><strong>The MLP block</strong> — Part 1&rsquo;s machine, sitting between every
+  pair of attention layers and holding most of the parameters.</li>
+<li><strong>Residual connections</strong> — <code>x + f(x)</code>: Part 1&rsquo;s vanishing
+  gradient, solved by <em>addition</em>, because gradient flows through
+  a sum untouched.</li>
+<li><strong>Layer normalisation</strong> — keeping every residual stream at
+  unit scale so the additions stay sane.</li>
+</ul>
+<p>Plus exactly one new idea, and it is a triangle: the <strong>causal
+mask</strong>. Position <code>t</code> may attend only to positions <code>≤ t</code> — which
+converts the whole machine into a next-token predictor. Feed it
+text, ask it to predict each character from the ones before,
+and you have a <strong>language model</strong>.</p>
+<p>The companion script builds all of it in NumPy — LayerNorm
+Jacobian, softmax Jacobian, multi-head reshapes, every backward
+pass by hand, 150 sampled gradients audited at <strong>6.53e-10</strong> —
+and then runs the three demonstrations this section has been
+driving toward: the assembly justified, an algorithm learned
+and <em>read out of the weights</em>, and a machine that writes.</p>
+<hr />
+<h2>A worked example: the bridge, the mirror, the writer</h2>
+<h3>Why the residuals are in the box</h3>
+<p>Every component earned its seat in earlier parts except one —
+the residual connection has been asserted, never measured.
+Four layers deep, on the reversal task below, same parameters,
+same budget:</p>
+<pre><code>DEMO 1 --- The assembly, and why the residuals are in it
+    with residuals   : loss 0.195
+    without residuals: loss 0.739
+</code></pre>
+<p>The only difference is whether the gradient may cross each
+block by addition or must fight through it. Part 1 showed six
+sigmoid storeys starving the bottom of a stack; the residual
+stream is the reason modern &ldquo;deep&rdquo; means 96 layers and not 6 —
+every layer learns a <em>correction</em> to a signal that always
+flows.</p>
+<h3>A transformer learns an algorithm</h3>
+<p>Read 8 symbols, then a separator, then emit them in reverse.
+One layer, <strong>two</strong> heads, a thousand training steps:</p>
+<pre><code>DEMO 2 --- A transformer learns an algorithm
+    token accuracy 99.8%   sequence exact-match 98.6%
+ 
+    attention peaks per output step, over the 8 inputs:
+    head 0: [7, 6, 5, 4, 3, 2, 7, 7]
+    head 1: [7, 6, 5, 4, 3, 2, 1, 0]   &lt;-- the mirror, learned
+</code></pre>
+<p>Head 1 <strong>is</strong> the algorithm: producing output <code>i</code>, it attends
+to input <code>8−1−i</code> — a clean anti-diagonal that nobody
+programmed, sitting in the attention map like a receipt. Head 0
+learned most of the same mirror and hands off the rest. This
+division of labour — one mechanism, several specialists — is
+the practical answer to why <em>multi</em>-head attention beats one
+big head: each head is cheap, and each can commit to a
+different relation.</p>
+<h3>A transformer learns a language</h3>
+<p>The final demo trains the same machine — two layers, four
+heads, 66k parameters — as a character-level language model on
+a corpus with a certain familiarity: <strong>this section&rsquo;s own
+sentences</strong>, 1,447 characters of them.</p>
+<pre><code>DEMO 3 --- A transformer learns a language
+    step:  0      100    500    1500
+    loss:  3.87   2.29   0.21   0.12     (nats/char; uniform = 3.37)
+</code></pre>
+<p>And then the machine writes. Prompt <code>"the gradient "</code>,
+temperature 0.4:</p>
+<pre><code>&quot;the gradient flows through the addition untouched. the
+ attention map is a receipt you can read: the modell shows
+ where it looked. one celll, any length: &quot;
+</code></pre>
+<p>Prompt <code>"the moon "</code> — which appears nowhere in the corpus:</p>
+<pre><code>&quot;the moon celll state is a highway through time. width
+ memorises and depth composes: the first layer builds curves
+ from &quot;
+</code></pre>
+<p>Temperature 2.0:</p>
+<pre><code>&quot;the gradient flowss tat step ofis atace is ane mplace is an
+ affi linear layer. the network learns by walking the chavked. t&quot;
+</code></pre>
+<p>Honesty about what happened: 66k parameters on 1.4k characters
+is a <strong>memoriser</strong> — it recites its corpus (with the occasional
+stutter — &ldquo;modell&rdquo;, &ldquo;celll&rdquo; — where two grooves overlap),
+absorbs an unseen prompt into the nearest memorised channel,
+and dissolves into alphabet soup when temperature melts its
+certainties. No intelligence was created in the making of this
+demo. But the mechanism doing the reciting — embed, attend,
+correct, predict, sample — is <em>identical</em> to the one that, at
+roughly a hundred million times the scale, wrote half the text
+you read this week. Scale changed the wattage. Parts 1 through
+5 are the whole circuit.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Per layer: <code>O(T² · d)</code> for attention (Part 4&rsquo;s bill, now paid
+in full) plus <code>O(T · d²)</code> for the MLP — and which term
+dominates depends on whether the sequence or the width is
+bigger, a fact that shapes real model design. Parameters are
+<code>O(L · d²)</code>, independent of <code>T</code> as always. The memory that
+hurts is the <code>O(T²)</code> of attention weights per layer per head —
+the reason &ldquo;context length&rdquo; is a marketed number. And training
+parallelises across <em>all</em> positions at once (the mask, not the
+clock, enforces order), which is the property that ended the
+recurrent era; generation, ironically, is still one token at a
+time.</p>
+<hr />
+<h2>What the assembly bought, historically</h2>
+<p>The 2017 paper&rsquo;s title was a provocation aimed at Part 3:
+attention had been the RNN&rsquo;s assistant, and the authors fired
+the RNN. What remained trained in parallel over a whole corpus
+on a whole cluster — and it <em>scaled</em>: loss falling as smooth
+power laws in parameters, data, and compute, further than
+anyone expected. BERT read with it; GPT wrote with it; then
+GPT-3, and the era in which this article is being read. Nearly
+every large model since is this exact machine with engineering
+around the bill — KV-caches to reuse yesterday&rsquo;s attention,
+FlashAttention to stop materialising the <code>T²</code> matrix,
+mixture-of-experts to grow the Part 1 blocks without paying
+for them every token — and the residual stream is still the
+spine of all of it.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 6, <strong>Graph Neural Networks</strong>, drops the last assumption
+standing: that data comes in a grid or a line at all. Molecules,
+social networks, and road maps arrive as nodes and edges — and
+message passing turns out to be attention&rsquo;s cousin, with the
+graph deciding who may look at whom.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/11-deep-learning-architectures/05-transformers/transformer.py"><strong>transformer.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python transformer.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in three to four minutes.
+Everything is from scratch: pre-LN decoder blocks, causal
+multi-head self-attention, LayerNorm with its hand-derived
+Jacobian, the sampled gradient audit, string reversal, and the
+character-level language model with temperature sampling. The
+headline insight worth pinning to the wall: <strong>a transformer is
+this section assembled — Part 4&rsquo;s attention with every position
+querying every earlier one, Part 1&rsquo;s MLP holding most of the
+parameters, residual connections carrying the gradient across
+96 layers by addition (measured: loss 0.195 with them, 0.739
+without), and one causal triangle turning it into a next-token
+predictor — a machine that learns algorithms you can read out
+of its attention maps (a perfect anti-diagonal for string
+reversal, 98.6% exact) and languages you can sample from (3.87
+→ 0.12 nats/char), and whose scaled-up twin wrote half of what
+you read this week</strong>.</p>
+<hr />
+<p><em>This is Part 5 of the Deep Learning Architectures track in the Algorithms in Python series. The companion script <code>transformer.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It assembles <a href="https://medium.com/p/9c0d36baa5bc">Part 1</a>&rsquo;s MLP, <a href="https://medium.com/p/a27e38010fd8">Part 4</a>&rsquo;s attention, and the lessons of <a href="https://medium.com/p/9a17b15e8339">Part 3</a> into the machine that ended the recurrent era. Part 6 will look at Graph Neural Networks.</em></p>
