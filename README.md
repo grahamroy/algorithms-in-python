@@ -132,7 +132,7 @@ clear explanations and Python implementations.
 | 1 | Multi-Layer Perceptron (MLP) | ✅ |
 | 2 | Convolutional Neural Networks (CNNs) | ✅ |
 | 3 | Recurrent Neural Networks (RNN / LSTM / GRU) | ✅ |
-| 4 | Attention Mechanisms | ⬜ |
+| 4 | Attention Mechanisms | ✅ |
 | 5 | Transformers | ⬜ |
 | 6 | Graph Neural Networks (GCN / GAT / GraphSAGE) | ⬜ |
 | 7 | Generative Adversarial Networks (GANs) | ⬜ |

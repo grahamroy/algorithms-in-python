@@ -1,0 +1,165 @@
+<p>Part 3 ended at a measured cliff. A recurrent network relates
+step 40 to step 1 by <em>surviving</em> — one fact, carried through 39
+hops of state, the error signal arriving ~300× weaker for the
+trip, until at forty steps of distance the whole thing dropped
+to chance. The failure wasn&rsquo;t capacity. It was the <em>route</em>:
+information had to swim the whole channel to be used.</p>
+<p><strong>Attention</strong> (Bahdanau, Cho &amp; Bengio, 2014) removes the route.
+Step 40 does not wait for information to reach it — it <strong>looks
+at</strong> step 1 directly. The mechanism is a soft dictionary
+lookup, and three small matrices define it:</p>
+<pre><code>q = query   (what am I looking for?)          -- from the reader
+K = keys    (what does each position offer?)  -- one per position
+V = values  (what does each position say?)
+ 
+weights = softmax( q · Kᵀ / √d_k )    -- a soft lookup
+answer  = Σ_t  weights_t · V_t        -- a weighted average
+</code></pre>
+<p>Every position is exactly <strong>one hop</strong> from every other. There
+is no channel to survive, no state to decay — distance stops
+existing as an architectural concept. (The <code>√d_k</code> is a
+housekeeping constant: dot products grow with dimension, and
+unscaled they push the softmax into saturated, gradient-free
+territory.)</p>
+<p>This article builds one attention head from scratch — the
+softmax Jacobian hand-derived, the whole backward pass audited
+at <strong>1.90e-10</strong> — and runs it on Part 3&rsquo;s exact stage, where it
+does something no architecture so far in this section could:
+it makes the cliff <em>unbuildable</em>. Then it pays for its honesty
+twice — once by showing what attention fundamentally cannot see
+without help, and once by printing the quadratic bill that
+defines the architecture built on top of it.</p>
+<hr />
+<h2>A worked example: the cliff, the set, the receipt</h2>
+<h3>The cliff, unbuilt</h3>
+<p>Part 3&rsquo;s recall task, Part 3&rsquo;s budget: the first symbol is the
+label, <code>T</code> distractors follow, and the RNN went from perfect at
+30 steps of distance to chance at 40.</p>
+<pre><code>DEMO 1 --- The cliff, unbuilt
+    distance T =  40:  100.0%
+    distance T =  80:  100.0%
+    distance T = 160:  100.0%
+</code></pre>
+<p>Flat — at four times the distance that destroyed the vanilla
+RNN. And the gradient tells the same story before training
+begins. On <code>T = 40</code> at initialisation:</p>
+<pre><code>    |dL/dE| at t=1: 1.8e-03   t=20: 2.1e-03   t=40: 8.2e-04
+    farthest-to-nearest ratio: 2.2x   (the RNN's: ~300x, downhill)
+</code></pre>
+<p>The error signal reaches the <em>farthest</em> position as strongly as
+the nearest — a ratio of 2.2 against the RNN&rsquo;s ~300, and even
+that residue is positional-encoding texture, not decay. Where
+Part 3&rsquo;s problem was &ldquo;will the signal survive the trip,&rdquo; here
+there is no trip.</p>
+<h3>A set, not a sequence</h3>
+<p>Now the honest half of the bargain. Look back at the equations:
+<code>q</code>, <code>K</code>, <code>V</code> see a <strong>bag of vectors</strong>. Shuffle the sequence
+and every attention output is <em>identical</em> — the mechanism is
+permutation-invariant by construction. Order does not exist for
+it unless smuggled back in, which is the entire job of the
+<strong>positional encodings</strong> (sinusoids of geometrically spaced
+frequencies, added to the embeddings — a soft binary clock each
+position wears). Remove them:</p>
+<pre><code>DEMO 2 --- A set, not a sequence
+    recall (needs 'FIRST'):   with positions 100.0%   without  34.2%
+    majority (order-free):    without positions 100.0%
+</code></pre>
+<p>Without positions, recall collapses toward chance — not because
+the model is weak, but because <em>&ldquo;first&rdquo; is not a property of a
+set</em>; the question has become inexpressible. And the control
+proves the collapse is about order, not blindness: a majority
+task (which symbol occurs more often — no order required) is
+aced by the same position-free model, because a weighted
+softmax average is a natural counting machine. Positional
+encoding is not an implementation detail; it is the entire
+concept of sequence, bolted back on.</p>
+<h3>The receipt, and the bill</h3>
+<p>Where did the trained recall model actually look?</p>
+<pre><code>DEMO 3 --- attention weights, averaged over the test set
+    weight on position 0 (the answer): 0.992
+    average weight elsewhere:          0.0002
+</code></pre>
+<p>99.2% of the lookup lands on the one position that matters. The
+RNN&rsquo;s memory was a vector of 24 unlabelled numbers; attention
+leaves a <strong>receipt you can read</strong>. (One honest caveat the
+literature earned the hard way: in deep multi-head stacks,
+attention maps stop being straightforward explanations — but
+the inspectability of a single head is real, and it is a large
+part of why the mechanism conquered the field so quickly.)</p>
+<p>Then the bill. This model is Bahdanau&rsquo;s original setting: <em>one</em>
+query attending over <code>T</code> positions — <code>O(T)</code> per lookup. Modern
+<strong>self-attention</strong> gives every position its own query — <code>T</code>
+lookups over <code>T</code> positions. Exact multiply counts in the
+attention core:</p>
+<pre><code>    T        one query      all T queries     growth
+     40          1,312             53,792        --
+     80          2,592            209,952      x3.9
+    160          5,152            829,472      x4.0
+    320         10,272          3,297,312      x4.0
+</code></pre>
+<p>Double the sequence, quadruple the bill: <code>O(T²)</code>. That is the
+price of making distance free — and the defining engineering
+constraint of the architecture that pays it.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>The trade against Part 3 is exact and symmetrical. The RNN:
+<code>O(T)</code> compute, <code>O(1)</code> distance-to-information, paid for with
+sequential steps and a decaying signal. Attention: every
+position one hop away, gradients intact, fully parallel across
+positions — paid for with <code>O(T²)</code> score pairs and the memory to
+hold them. Neither side of the ledger is free; the last twenty
+years of sequence architecture is the story of which side you
+would rather pay, and Part 3&rsquo;s Big-O table already whispered
+the answer hardware chose.</p>
+<hr />
+<h2>From translation alignment to &ldquo;all you need&rdquo;</h2>
+<p>Attention was born as a patch. 2014 neural translation squeezed
+a whole French sentence through one fixed vector, and long
+sentences degraded — so Bahdanau bolted a lookup onto the RNN:
+let the decoder <em>glance back</em> at every source word as it
+writes, and learn where to glance. The attention maps learned
+soft word alignments nobody supervised, translation quality
+jumped, and for three years attention lived as the RNN&rsquo;s
+assistant. The 2017 heresy — <em>Attention Is All You Need</em>
+(Vaswani et al.) — was to fire the RNN and keep the assistant:
+stack self-attention with Part 1&rsquo;s MLPs, accept the quadratic
+bill in exchange for total parallelism across a 10,000-GPU
+cluster, and the modern era followed. Every large language
+model running today is this article&rsquo;s mechanism, multiplied:
+more heads, more layers, one causal mask — and Part 5
+assembles exactly that machine.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 5, <strong>Transformers</strong>, takes this one head and builds the
+full machine: multi-head self-attention (every position
+querying every other, several lookups in parallel), the MLP
+blocks from Part 1 stacked between them, residual connections
+— Part 1&rsquo;s vanishing-gradient lesson, solved by addition — and
+the causal mask that turns the whole thing into a language
+model.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/11-deep-learning-architectures/04-attention-mechanisms/attention.py"><strong>attention.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python attention.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in about two minutes. Everything
+is from scratch: embeddings, sinusoidal positional encodings,
+the attention forward pass, the full hand-derived backward pass
+(softmax Jacobian included) audited against central
+differences, and Part 3&rsquo;s recall stage. The headline insight
+worth pinning to the wall: <strong>attention is a soft dictionary
+lookup — softmax(q·Kᵀ/√d_k)·V — that puts every position one
+hop from every other, so the RNN&rsquo;s cliff cannot be built: 100%
+recall at distance 40, 80, and 160 with gradient reach flat
+(2.2× vs the RNN&rsquo;s ~300×) and a readable receipt (99.2% of
+attention on the answering position) — but the mechanism sees
+a SET, collapsing to 34.2% the moment &ldquo;first&rdquo; must exist
+without positional encodings, and giving every position its
+own query costs O(T²): 53,792 multiplies at T=40, 3.3 million
+at T=320</strong>.</p>
+<hr />
+<p><em>This is Part 4 of the Deep Learning Architectures track in the Algorithms in Python series. The companion script <code>attention.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It dissolves the distance cliff measured in <a href="https://medium.com/p/9a17b15e8339">Part 3</a> and prices the machinery the next part will assemble. Part 5 will look at Transformers.</em></p>
