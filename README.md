@@ -135,7 +135,7 @@ clear explanations and Python implementations.
 | 4 | Attention Mechanisms | ✅ |
 | 5 | Transformers | ✅ |
 | 6 | Graph Neural Networks (GCN / GAT / GraphSAGE) | ✅ |
-| 7 | Generative Adversarial Networks (GANs) | ⬜ |
+| 7 | Generative Adversarial Networks (GANs) | ✅ |
 | 8 | Variational Autoencoders (VAEs) | ⬜ |
 | 9 | Diffusion Models | ⬜ |
 | 10 | Normalising Flows | ⬜ |

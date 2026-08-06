@@ -1,0 +1,234 @@
+<p>Six articles into this section, every architecture has done the
+same job with a different geometry: given a point, a picture, a
+sequence, a graph — <em>name it</em>. This article pivots the section
+from architectures that classify to architectures that
+<strong>create</strong>, and it begins with the strangest training signal in
+deep learning: for the network doing the creating, <em>no loss
+function is ever written down</em>.</p>
+<p>Instead, two networks play a game (Goodfellow et al., 2014). A
+<strong>generator</strong> — call it the forger — maps random noise <code>z</code> to a
+fake data point <code>G(z)</code>. A <strong>discriminator</strong> — the detective — is
+a perfectly ordinary binary classifier: real or fake? The whole
+arrangement fits in one line:</p>
+<pre><code>min_G max_D   E_x[ log D(x) ]  +  E_z[ log(1 - D(G(z))) ]
+</code></pre>
+<p>The detective maximises; the forger minimises. The detective&rsquo;s
+training step is Part 1&rsquo;s bread and butter — binary
+cross-entropy on a stack of layers. The forger&rsquo;s step is the
+novelty: its gradient arrives <em>through the detective</em> — take
+the detective&rsquo;s verdict on a fake, backpropagate through the
+detective&rsquo;s frozen weights to its input socket, and keep going
+into the forger. The detective&rsquo;s mistakes are the forger&rsquo;s
+learning signal. Each network is the other&rsquo;s loss function.</p>
+<p>That one design choice buys something remarkable — a training
+signal for &ldquo;make this look real&rdquo; without anyone defining
+&ldquo;real&rdquo; — and this article measures what it costs: a score that
+orbits instead of descends, a gradient that can vanish through
+the <em>opponent&rsquo;s confidence</em>, and a failure mode — mode collapse
+— that turns out to be a race, not a loss-function bug.</p>
+<hr />
+<h2>The stage: draw the spirals, then a ring</h2>
+<p>The target distribution is this section&rsquo;s own <strong>two spirals</strong> —
+the stage Parts 1 and 2 <em>classified</em>. Tonight nobody classifies:
+the forger must learn to <em>draw</em> them, from 2-d Gaussian noise,
+one point at a time. Both players are small two-hidden-layer
+MLPs, and both hand-written backward passes are audited at
+startup (detective 3.75e-10, forger-through-detective 1.68e-10
+against central differences).</p>
+<p>Because a GAN has no trustworthy loss to read, the script builds
+two external yardsticks — <strong>quality</strong> (fraction of generated
+points within 0.10 of the true spiral curve) and <strong>coverage</strong>
+(how many of 60 bins along the arms receive points) — and
+anchors both by scoring <em>the real data itself</em>. For the failure
+studies, a second stage: eight Gaussians on a ring, the standard
+mode-collapse laboratory.</p>
+<hr />
+<h2>A worked example: the game, the freeze, the race</h2>
+<h3>From noise to spirals</h3>
+<pre><code>DEMO 1 --- The game: from noise to spirals
+     step   quality   coverage   detective acc
+     1000     95.0%     85.0%        45.6%
+     2000     98.7%     81.7%        47.9%
+     3000     97.0%     60.0%        48.7%
+     4000     99.4%     86.7%        55.5%
+     5000     93.7%     70.0%        45.4%
+     6000     98.7%     81.7%        50.4%
+     real     99.5%     93.3%       (anchor)
+</code></pre>
+<p>The game works: after six thousand alternating steps the
+forger&rsquo;s samples score within a point of the real data&rsquo;s own
+quality anchor, and the detective is reduced to <strong>50.4%</strong> — a
+coin flip, which in this game is what victory looks like. When
+the fakes match the data, the best possible detective can only
+guess.</p>
+<p>But read the <em>path</em>, because it is the article&rsquo;s first lesson.
+Quality hits 99.4% at step 4000, falls to 93.7% at 5000, and
+recovers; coverage swings between 60% and 87% and never reaches
+the real data&rsquo;s 93.3% — the spiral&rsquo;s faint outer tails keep
+being lost and re-found. Nothing is broken. A gradient-descent
+loss curve goes <em>down</em>; a game <strong>orbits</strong> its equilibrium. This
+is the section&rsquo;s first architecture where the training curve
+cannot be trusted, and it is why GAN practice leans on external
+yardsticks (FID, precision/recall — our quality and coverage
+are their toy cousins) rather than on the loss.</p>
+<h3>The frozen forger</h3>
+<p>The section has now met the vanishing gradient three times:
+Part 1 lost it to depth, Part 3 to time, Part 6 to
+over-smoothing. Fourth appearance, strangest venue: a GAN can
+lose its gradient through the <strong>opponent&rsquo;s confidence</strong>.</p>
+<p>The forger&rsquo;s original minimax loss is <code>log(1 - D(G(z)))</code>, and
+its gradient is proportional to <code>D(G(z))</code> — the detective&rsquo;s
+belief that the fake is real. Early in training the forger&rsquo;s
+drafts are garbage, the detective rejects them with near
+certainty, that belief is nearly zero — and so, exactly when
+the forger has everything to learn, it is handed nothing to
+learn from. The script stages the bad start honestly: the
+forger&rsquo;s first drafts land far from the data (in high dimension
+this happens for free), and the detective studies them for 500
+steps before the forger moves. Mean <code>D(fake)</code> after the head
+start: 6.4e-04. Then the same game, four ways:</p>
+<pre><code>    optimiser   forger loss        final quality   coverage
+    SGD         non-saturating      93.1%         91.7%
+    SGD         saturating           0.0%          0.0%
+    ADAM        non-saturating     100.0%         83.3%
+    ADAM        saturating          99.8%         76.7%
+</code></pre>
+<p>The SGD rows are the theorem made visible. The saturating
+forger&rsquo;s gradient norm over training:</p>
+<pre><code>    non-saturating: 10:2e+00  200:9e-02  1000:6e-02  3000:2e-01  6000:2e-01
+    saturating    : 10:7e-03  200:3e-90  1000:1e-33  3000:4e-53  6000:3e-38
+</code></pre>
+<p>Frozen solid — norms around 1e-38 at the end, quality 0.0%,
+<em>forever</em>: the detective grows more certain, which shrinks the
+gradient, which keeps the forger where it is, which lets the
+detective grow more certain. The <strong>non-saturating</strong> fix — train
+the forger to <em>maximise</em> <code>log D(G(z))</code> instead — faces the
+identical detective from the identical start and walks home to
+93.1%: its gradient approaches −1, not 0, precisely when the
+detective is confident. Same optimum, opposite failure mode,
+and it shipped in the original GAN paper for exactly this
+reason.</p>
+<p>The Adam rows are the honest footnote: Adam&rsquo;s update is
+scale-normalised, so it largely masks the disease even with the
+saturating loss — one reason the folklore &ldquo;always use the
+non-saturating loss&rdquo; and the folklore &ldquo;GANs train fine with
+Adam&rdquo; coexist. The disease is real; adaptive optimisers are a
+partial bandage; the cure is the loss.</p>
+<h3>Mode collapse is a race</h3>
+<p>The forger&rsquo;s laziest winning move is to find one output the
+detective currently trusts and produce <em>only that</em>. On the
+eight-Gaussian ring this failure has a name — mode collapse —
+and the cleanest way to cause it is not to change any loss but
+to change a <strong>speed</strong>. Same architecture, same data, three
+seeds per row; the only knob is the detective&rsquo;s learning rate:</p>
+<pre><code>DEMO 3 --- Mode collapse is a race
+    detective lr    modes covered      on-mode mass
+         1e-03      8/8  8/8  8/8      81%  69%  80%
+         3e-04      8/8  6/8  8/8      71%  44%  68%
+         1e-04      3/8  3/8  4/8       7%   8%  11%
+         3e-05      1/8  0/8  0/8       2%   0%   0%
+</code></pre>
+<p>A clean dose-response. At matched speed the ring is covered,
+every seed. Slow the detective thirty-fold and the forger stops
+learning the distribution entirely — not because the objective
+changed, but because the player enforcing it fell behind. And
+watching the slow-detective run from inside shows what collapse
+actually <em>is</em>:</p>
+<pre><code>     step    modes covered    dominant mode
+      500        1/8             6
+     1000        2/8             5
+     1500        0/8            --
+     2000        1/8             7
+     2500        1/8             5
+     3000        2/8             1
+     3500        2/8             0
+     4000        3/8             7
+     4500        3/8             0
+     5000        3/8             3
+     5500        2/8             6
+     6000        4/8             0
+</code></pre>
+<p>The forger camps on one mode; the slow detective eventually
+learns to reject it; the forger flees to another — around and
+around the ring, never covering it. Mode collapse is not a
+wrong loss; it is a <strong>lost race</strong>. Read through that lens,
+the practical GAN toolbox stops looking like folklore:
+two-timescale learning rates, extra detective steps per forger
+step, minibatch statistics handed to the detective — every one
+of them is a way of keeping the detective ahead. The
+equilibrium is a balance of speeds, not a bottom to descend to.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>The economics that kept GANs alive: <strong>sampling is one forward
+pass</strong> — <code>O(L · d²)</code> and you have your image, against the
+hundreds of sequential denoising passes a diffusion model will
+charge for the same picture (Part 9&rsquo;s story). Training costs
+three network passes per step — detective on real, detective on
+fake, forger through detective — and the parameter bill is two
+networks, though only the forger ships; the detective is
+training scaffolding, discarded at the end. The line with no
+happy entry is evaluation: there is no loss you can trust, so
+honest measurement means external statistics over <em>samples</em> —
+at scale, FID&rsquo;s covariance step alone is an <code>O(d³)</code> reminder
+that with GANs even the scoreboard must be built by hand.</p>
+<hr />
+<h2>Where the forgeries went</h2>
+<p>For roughly six years this game <em>was</em> generative modelling.
+DCGAN (2016) found the convolutional recipe that made it
+stable enough to use; StyleGAN&rsquo;s faces became the public image
+of &ldquo;AI-generated&rdquo;; pix2pix and CycleGAN turned the detective
+into a general-purpose loss for image-to-image translation —
+day to night, sketch to photo — where nobody could have written
+the pixel loss by hand; SRGAN did the same for super-resolution.
+The research arc bent toward this article&rsquo;s two failures:
+WGAN&rsquo;s critic replaces the detective&rsquo;s probability with a score
+whose gradient does not saturate (the frozen forger, addressed
+at the loss), and the two-timescale update rule — now standard
+— is the race, addressed at the clock. The same forgery power
+has an ugly edge — &ldquo;deepfake&rdquo; names the case where the fake is
+of a person — and that is an argument about deployment, not
+architecture. Diffusion models have since taken the
+image-generation crown, but the adversarial <em>idea</em> outlived the
+throne: a learned detective remains the field&rsquo;s best answer
+whenever &ldquo;does this look right?&rdquo; has no formula — and the
+one-pass forger still owns the applications where the answer
+must arrive in milliseconds.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 8, <strong>Variational Autoencoders</strong>, generates from the
+opposite temperament: it <em>does</em> write down an honest loss — the
+ELBO, a compression bargain between reconstruction and a tidy
+latent space — and pays for that honesty with blur where the
+GAN bought sharpness with instability. The two are the section&rsquo;s
+clearest trade: a loss you can trust versus samples you cannot
+distinguish.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/11-deep-learning-architectures/07-generative-adversarial-networks/gan.py"><strong>gan.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python gan.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in under a minute. Everything is
+from scratch: both players, both hand-derived backward passes
+(the forger&rsquo;s gradient threaded through the detective&rsquo;s frozen
+weights), the startup audits, the anchored quality and coverage
+yardsticks, and every experiment above. The headline insight
+worth pinning to the wall: <strong>a GAN never writes down a loss for
+its generator — the detective is the loss — and everything
+strange about GAN training follows from that one substitution:
+victory is a detective at a 50.4% coin flip while quality sits
+a point under the data&rsquo;s own 99.5% anchor; the score orbits
+the equilibrium instead of descending; the minimax gradient is
+proportional to the detective&rsquo;s belief D(G(z)), so a confident
+detective froze an SGD forger at 0.0% quality with gradients
+near 1e-38 while the non-saturating loss recovered 93.1% from
+the identical start; and mode collapse is a lost race, not a
+wrong objective — slow the detective thirty-fold and coverage
+falls from 8/8 on every seed to 0/8 while the forger flees
+around the ring, so every practical GAN trick is one more way
+of keeping the detective ahead</strong>.</p>
+<hr />
+<p><em>This is Part 7 of the Deep Learning Architectures track in the Algorithms in Python series. The companion script <code>gan.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. The two spirals it learns to draw are the stage <a href="https://medium.com/p/9c0d36baa5bc">Part 1</a> and <a href="https://medium.com/p/6f860b54044f">Part 2</a> classified, and the vanishing gradient it meets through the detective&rsquo;s confidence is the section&rsquo;s oldest enemy (<a href="https://medium.com/p/9a17b15e8339">Part 3</a>, <a href="https://medium.com/p/5fe15dcbafad">Part 6</a>). Part 8 will look at Variational Autoencoders.</em></p>
