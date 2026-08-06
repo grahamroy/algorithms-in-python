@@ -1,0 +1,172 @@
+<p>Every architecture in this section so far has assumed the data
+had a <em>shape</em>. Part 2 assumed a grid of pixels. Parts 3 through
+5 assumed a line of timesteps. But molecules, social networks,
+citation webs, protein interactions, and road maps assume
+neither — they arrive as <strong>nodes and edges</strong>, and the only
+geometry they have is <em>who is connected to whom</em>.</p>
+<p>The graph neural network&rsquo;s answer is <strong>message passing</strong>. Each
+layer, every node collects its neighbours&rsquo; feature vectors,
+averages them, and passes the result through a small learned
+map. The cleanest version is the GCN layer (Kipf &amp; Welling,
+2017):</p>
+<pre><code>H' = relu( Â H W ),      Â = D^(-1/2) (A + I) D^(-1/2)
+</code></pre>
+<p><code>A</code> is the adjacency matrix, the identity adds a self-loop
+(you are your own neighbour), and the degree normalisation
+stops popular nodes from shouting. One layer mixes one-hop
+neighbourhoods; <code>L</code> layers, <code>L</code> hops — weight sharing yet
+again, this time across <em>nodes</em>: the same <code>W</code> serves every
+neighbourhood in the graph, exactly as Part 2&rsquo;s kernel served
+every pixel.</p>
+<p>And that parallel is not a metaphor. It is the section&rsquo;s
+punchline, and this article earns it with measurements: <strong>a CNN
+is a GNN on the grid graph, and a transformer is a GNN on the
+complete graph</strong> — Part 4&rsquo;s attention is just message passing
+where everyone is everyone&rsquo;s neighbour and the weights are
+learned per pair. The graph decides who may look at whom.</p>
+<hr />
+<h2>The stage: weak features, strong structure</h2>
+<p>A <strong>stochastic block model</strong>: 360 nodes in 3 hidden
+communities, edges forming with probability 0.06 inside a
+community and 0.02 across — 2,144 edges that <em>mostly</em> respect
+the hidden grouping. Node features are the community signal
+drowned in noise, deliberately weak. Fifteen nodes are
+labelled. Transductive, five labels per class — Section 10&rsquo;s
+setting, deliberately: the GCN is the neural descendant of that
+track&rsquo;s label propagation, learning <em>what</em> to flood where the
+old algorithm could only flood labels. Both hand-written
+backward passes are audited at startup (GCN 2.46e-10, GAT
+2.81e-10).</p>
+<hr />
+<h2>A worked example: the edges, the blur, the defeat</h2>
+<h3>What the edges know</h3>
+<pre><code>DEMO 1 --- What the edges know
+    MLP, features only          :  58.3%
+    GCN, features + edges       :  85.8%
+    GCN, edges SHUFFLED         :  42.3%
+</code></pre>
+<p>The edges are worth 27 points: message passing turns &ldquo;my
+features are noisy&rdquo; into &ldquo;my <em>neighbourhood&rsquo;s average</em> is not&rdquo;
+— the same variance-reduction that made Part 2&rsquo;s shared kernel
+strong, played on an irregular board. And the third row is the
+sharp one: shuffle the edges (same degree structure, same
+features, wrong connections) and the GCN lands <em>below</em> the
+no-edge baseline. Wrong structure is not absence of signal — it
+is poison, faithfully propagated.</p>
+<h3>Over-smoothing: the depth lesson, inverted</h3>
+<p>Message passing is a random-walk step, and random walks forget
+where they started. First the mechanism in isolation:
+propagate the raw features <code>L</code> hops with no training at all,
+then fit a small classifier on what remains:</p>
+<pre><code>DEMO 2 --- Over-smoothing
+    hops L :   0     1     2     4     8    16    32
+    acc    : 58%   71%   81%   87%   80%   33%   33%
+</code></pre>
+<p>A clean rise — each hop denoises — then a collapse to exactly
+chance: past the graph&rsquo;s mixing time, every node&rsquo;s summary
+converges to the same stationary blur, and <em>there is nothing
+left to classify</em>. Training does not save the plain
+architecture. Part 5&rsquo;s fix does:</p>
+<pre><code>    depth    plain GCN    + residuals
+       2        85.8%        85.8%
+       4        85.2%        87.0%
+       8        33.3%        87.0%
+      16        33.3%        81.7%
+</code></pre>
+<p>Eight plain layers score 33.3% — chance, reached by honest
+depth. Part 1 taught that depth <em>composes</em>; this architecture
+is the honest counterexample where depth <strong>erases</strong>, because
+its per-layer operation is a contraction toward the average.
+The residual stream keeps each node&rsquo;s own signal alive
+alongside the neighbourhood blur — and 87% survives sixteen
+layers. Same lesson as Part 5, second payoff: let the network
+learn corrections, not replacements.</p>
+<h3>Attention&rsquo;s cousin, and an honest defeat</h3>
+<p>The GAT (Veličković et al., 2018) replaces the GCN&rsquo;s fixed
+degree-normalised average with <strong>learned</strong> per-edge weights —
+scores computed from each edge&rsquo;s endpoint features, softmaxed
+over the neighbourhood. It is precisely Part 4&rsquo;s attention,
+masked to the graph. Strictly more flexible. Measured:</p>
+<pre><code>DEMO 3 --- GCN vs GAT, across label budgets
+    labels/class    GCN      GAT
+         5         85.8%    44.9%
+        10         86.7%    63.6%
+        20         85.7%    62.7%
+</code></pre>
+<p>The GCN wins every row, and there is no trick in it: attention
+weights computed from noise-drowned features are noise with
+extra parameters, and at these label counts the extra
+parameters simply overfit. This is Part 2&rsquo;s rhyme in its third
+verse — dense lost to locally-connected lost to shared then;
+learned edge weights lose to uniform averaging now — <strong>the less
+data you have, the more your architecture should already
+know</strong>. GAT earns its keep on feature-rich graphs (the citation
+networks it was born on have thousands of informative
+dimensions per node, plus heavy dropout), where an edge <em>can</em>
+be judged. Here, honestly, it cannot.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>The costs that matter: a message-passing layer is <code>O(E · d)</code> —
+one message per edge — which for sparse real-world graphs is
+dramatically cheaper than attention&rsquo;s all-pairs <code>O(n² · d)</code>;
+the companion script&rsquo;s dense matrices are a small-n
+convenience, not the method. Parameters are <code>O(L · d²)</code>,
+independent of graph size, the section&rsquo;s oldest refrain. The
+practical wrinkle that named an architecture: mini-batching a
+graph is awkward because neighbourhoods overlap —
+<strong>GraphSAGE</strong>&rsquo;s move is to <em>sample</em> a fixed number of
+neighbours per node, capping the exploding receptive field and
+making web-scale graphs (billions of edges, Pinterest-sized)
+trainable a batch at a time.</p>
+<hr />
+<h2>Where the graphs are</h2>
+<p>Molecules are graphs, and GNN property prediction is standard
+equipment in drug discovery pipelines. Recommenders are
+bipartite graphs of people and things — PinSage served a
+billion-node version of this article. Chips, road networks,
+knowledge bases, particle showers. And the framing runs deeper
+than any application: message passing is the <em>general case</em> of
+this section — set the graph to a grid and recover the CNN, to
+a line and recover (roughly) the RNN&rsquo;s locality, to the
+complete graph and recover the transformer. The last five
+articles were special graphs all along. One honest caveat
+closes the tour: everything here leaned on <em>homophily</em> —
+neighbours tending to share labels. Graphs where opposites
+attract (fraud rings, protein interactions) invert the
+assumption, and vanilla message passing struggles exactly as
+much as the assumption is false. Priors, as ever, only pay
+when true.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 7, <strong>Generative Adversarial Networks</strong>, pivots the
+section from architectures that <em>classify</em> to architectures
+that <em>create</em> — and it starts with the strangest training
+signal in deep learning: two networks locked in a game, a
+forger and a detective, each the other&rsquo;s loss function.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/11-deep-learning-architectures/06-graph-neural-networks/gnn.py"><strong>gnn.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python gnn.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in under a minute. Everything is
+from scratch: the stochastic block model, the normalised
+adjacency, GCN and GAT with hand-derived gradients (masked
+softmax Jacobian included), the residual variant, and the
+startup audits. The headline insight worth pinning to the
+wall: <strong>message passing is weight sharing across
+neighbourhoods — H&rsquo; = relu(ÂHW) — and it makes the edges
+themselves the model: worth +27 points when right (58.3% →
+85.8%), poison when wrong (42.3% shuffled), and self-erasing
+when over-applied (chance at 8 plain layers, because averaging
+is a random walk and walks forget — until residuals keep 87%
+alive at sixteen); learned edge attention loses honestly to
+the uniform prior at every label budget here, and the family
+tree collapses to one sentence: a CNN is a GNN on the grid, a
+transformer is a GNN on the complete graph, and the graph
+decides who may look at whom</strong>.</p>
+<hr />
+<p><em>This is Part 6 of the Deep Learning Architectures track in the Algorithms in Python series. The companion script <code>gnn.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It generalises <a href="https://medium.com/p/6f860b54044f">Part 2</a>&rsquo;s weight sharing and <a href="https://medium.com/p/a27e38010fd8">Part 4</a>&rsquo;s attention to arbitrary structure, reuses <a href="https://medium.com/p/ceced896de61">Part 5</a>&rsquo;s residual lesson, and is the neural descendant of Section 10&rsquo;s <a href="https://medium.com/p/56d8ae72db5a">label propagation</a>. Part 7 will look at Generative Adversarial Networks.</em></p>
