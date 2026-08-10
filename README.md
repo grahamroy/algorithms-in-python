@@ -138,7 +138,7 @@ clear explanations and Python implementations.
 | 7 | Generative Adversarial Networks (GANs) | ✅ |
 | 8 | Variational Autoencoders (VAEs) | ✅ |
 | 9 | Diffusion Models | ✅ |
-| 10 | Normalising Flows | ⬜ |
+| 10 | Normalising Flows | ✅ |
 
 ### 12 — Self-Supervised Learning
 | # | Algorithm | Status |
