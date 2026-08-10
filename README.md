@@ -137,7 +137,7 @@ clear explanations and Python implementations.
 | 6 | Graph Neural Networks (GCN / GAT / GraphSAGE) | ✅ |
 | 7 | Generative Adversarial Networks (GANs) | ✅ |
 | 8 | Variational Autoencoders (VAEs) | ✅ |
-| 9 | Diffusion Models | ⬜ |
+| 9 | Diffusion Models | ✅ |
 | 10 | Normalising Flows | ⬜ |
 
 ### 12 — Self-Supervised Learning
