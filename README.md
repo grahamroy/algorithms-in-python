@@ -144,7 +144,7 @@ clear explanations and Python implementations.
 | # | Algorithm | Status |
 |---|-----------|--------|
 | 1 | Contrastive Learning (SimCLR / CLIP) | ✅ |
-| 2 | Masked Autoencoding (MAE / BERT-style) | ⬜ |
+| 2 | Masked Autoencoding (MAE / BERT-style) | ✅ |
 | 3 | Self-Distillation (DINO) | ⬜ |
 | 4 | Momentum Contrast (MoCo) | ⬜ |
 
