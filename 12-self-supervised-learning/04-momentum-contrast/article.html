@@ -1,0 +1,175 @@
+<p>Part 1 established the economics of the crowd: in contrastive
+learning the negatives <em>are</em> the signal, they all ride inside
+the batch, and the similarity matrix bills you <code>O(B²)</code> for
+their company. SimCLR&rsquo;s answer was brute force — batches in the
+thousands. <strong>MoCo</strong> (He et al., 2020 — <em>Momentum Contrast</em>)
+asks the question an accountant would: must the crowd actually
+<em>live in the batch</em>?</p>
+<p>Its answer is a queue. Keep the last <code>K</code> key embeddings in a
+running ledger; each step, score the current queries against
+one positive key and the entire ledger, push the new keys in,
+pop the oldest out:</p>
+<pre><code>    query q  vs  [ its key k+ | the last 1,024 banked keys ]
+    push this step's keys; pop the oldest    (a FIFO queue)
+</code></pre>
+<p>A batch of eight can face a crowd of a thousand. But the naive
+version of this idea fails completely, and the reason is the
+actual invention. The ledger spans thousands of steps, so its
+entries were written by <em>old versions of the encoder</em> — and if
+the encoder drifts quickly, today&rsquo;s queries are being compared
+against coordinates from yesterday&rsquo;s map. MoCo&rsquo;s fix is Part
+3&rsquo;s trick pointed backwards: encode the keys with a slow <strong>EMA
+twin</strong> of the query encoder. DINO&rsquo;s teacher made the <em>targets</em>
+stable; MoCo&rsquo;s key encoder makes the <em>ledger</em> stable.
+Gradients flow through the query side only; the twin is one
+weight-lerp per step; the audit at startup checks the hand
+backprop through the queue softmax (4.02e-10 against central
+differences).</p>
+<p>The stage is shape world one last time — and, closing the
+section, the companion script retrains all four of its methods
+live for one final family table.</p>
+<hr />
+<h2>A worked example: the ledger, the law, the audit, the family</h2>
+<h3>A crowd that does not live in the batch</h3>
+<pre><code>    MoCo, batch 32, queue 1024 :  96.0% /  99.6%
+    MoCo, batch  8, queue 1024 :  96.0% /  99.7%
+</code></pre>
+<p>(Part 1&rsquo;s NT-Xent at batch 256 scored 95.1% / 99.7%.) A batch
+of <em>eight</em> walks through training with a crowd of a thousand at
+its back, and matches the batch-256 baseline on both probes.
+The crowd size and the batch size have been fully decoupled —
+the whole point of the design — at the cost of a queue and a
+second set of weights that no gradient ever touches.</p>
+<h3>The consistency law</h3>
+<p>Same budget everywhere; the only knob is the key encoder&rsquo;s
+momentum:</p>
+<pre><code>    key momentum    probe15   probe-all
+       0.000        31.8%     32.9%
+       0.900        49.1%     51.4%
+       0.990        75.1%     89.7%
+       0.999        84.4%     95.4%
+</code></pre>
+<p>Momentum 0 — keys written by the live network — is <strong>chance</strong>.
+Not weak: dead. This is the measurement that explains why MoCo
+is a paper and not a footnote. The queue itself is a data
+structure Section 00 covered in an afternoon; a queue whose
+thousand entries remain <em>mutually comparable</em> while the network
+that wrote them keeps moving — that requires the slowest twin
+in this section, and the dose–response is monotone all the way
+up. Consistency, not capacity, is what the momentum buys. (The
+MoCo paper&rsquo;s own ablation found exactly this cliff at scale;
+here it reproduces in 256 lines of NumPy.)</p>
+<h3>The honest audit: does the queue pay here?</h3>
+<pre><code>    queue     probe15   probe-all
+       16       85.6%     95.3%
+      256       85.5%     96.0%
+     4096       85.7%     95.8%
+</code></pre>
+<p>Flat. Sixteen negatives do what four thousand do, because three
+shape classes saturate a crowd early. And the control
+experiment seals it — plain NT-Xent at batch 8, fourteen
+in-batch negatives, no queue, no twin, given the same long
+budget:</p>
+<pre><code>    NT-Xent, batch 8, 32k steps:  95.9% /  99.9%
+</code></pre>
+<p>It matches MoCo. On shape world the queue buys <em>nothing</em> — and
+that is the finding, stated honestly rather than staged: MoCo
+solves a <strong>scale</strong> problem. Its machinery pays off where useful
+crowds number in the tens of thousands and no device holds the
+batch — at ImageNet resolution with ResNet encoders, which is
+where its results were earned. This is the third time this
+section has caught famous machinery not transferring to a small
+stage (MAE&rsquo;s 75% mask ratio, reparameterisation&rsquo;s necessity,
+now the queue), and the lesson compounds: <strong>measure before you
+inherit machinery.</strong></p>
+<h3>The family, closed</h3>
+<p>All four methods of the section, canonical configurations from
+their own articles, retrained live on the same 4,000 unlabelled
+images:</p>
+<pre><code>                          probe15   probe-all   yardstick
+    SimCLR / NT-Xent (P1)   95.1%     99.7%    the batch beside you
+    MAE (P2)                49.2%     67.6%    the data itself
+    DINO (P3)               94.5%     99.9%    a slow twin's targets
+    MoCo (P4)               96.0%     99.6%    a ledger, kept by a twin
+</code></pre>
+<p>Every self-supervised method in this section is one answer to
+the same question: when two views of the world should agree,
+<em>where does the yardstick for &ldquo;agree&rdquo; come from?</em> SimCLR buys a
+fresh crowd every batch. MoCo banks the crowd and keeps the
+bank honest with a slow twin. DINO drops the crowd entirely and
+chases the twin itself. MAE never compares to anyone — the
+hidden three quarters of the image is yardstick enough (and its
+low probe row is not a defect but a different contract: Part 2
+measured it winning after fine-tuning). Four pretexts, one
+16×16 stage, not a label in sight.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>MoCo&rsquo;s ledger line replaces SimCLR&rsquo;s quadratic one: scoring
+against the queue costs <code>O(B · K · d)</code> — <em>linear</em> in batch,
+with the crowd size <code>K</code> a free dial rather than a memory
+hostage. The key encoder adds one gradient-free forward pass
+and an <code>O(P)</code> weight-lerp; the queue itself is <code>O(K · d)</code>
+floats of memory — a few megabytes where SimCLR&rsquo;s crowd wanted
+a data-parallel cluster. That arithmetic is why MoCo ran on
+one GPU in 2020 while SimCLR wanted a TPU pod, and why the
+queue idea survived into every retrieval system that banks
+embeddings. The economics of this whole section then land in
+one contrast: pretraining is the expensive, label-free
+purchase — by crowd, ledger, twin or blank — and every
+downstream task thereafter is a probe or a light fine-tune.</p>
+<hr />
+<h2>Where the ledgers went</h2>
+<p>MoCo v2 absorbed SimCLR&rsquo;s tricks (projection head, stronger
+augmentations); v3 dropped the queue for ViT encoders — by
+then, batches had caught up with crowds — but kept the momentum
+twin, which proved the more durable half of the invention:
+today EMA twins stabilise DINO and its descendants, data2vec,
+semi-supervised teachers and RL targets alike. The ledger half
+lives on elsewhere: banked-embedding negatives are standard in
+retrieval and recommendation training (Section 07&rsquo;s two-tower
+models mine hard negatives from exactly such stores), and
+cross-batch memory is routine in metric learning. And the
+section&rsquo;s four answers now blend freely at the frontier —
+DINOv2 trains agreement <em>and</em> masking; contrastive towers sit
+beside masked backbones in every foundation-model stack. The
+question each method answered — where does the yardstick come
+from? — has stopped being a rivalry and become a menu.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Section 12 is complete. Section 13 takes the self-supervision
+story to its most consequential habitat — <strong>Natural Language
+Processing</strong> — beginning with Part 1, Word Embeddings
+(Word2Vec, GloVe, fastText): the discovery that a humble
+pretext on raw text (&ldquo;predict the word next door&rdquo;) packs
+meaning into vectors so well that arithmetic on them does
+analogy. It is this section&rsquo;s ideas, five years earlier and
+one modality over — and it is where the road to modern
+language models begins.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/12-self-supervised-learning/04-momentum-contrast/moco.py"><strong>moco.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python moco.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in about five minutes.
+Everything is from scratch: the queue, the EMA key encoder,
+the InfoNCE-against-the-ledger loss with hand-derived audited
+gradients, and live retrains of SimCLR, MAE and DINO for the
+family table. The headline insight worth pinning to the wall:
+<strong>the crowd never needed to live in the batch — a batch of
+eight with a thousand-deep ledger matches batch-256 SimCLR
+(96.0% vs 95.1%) — but a ledger is only worth keeping if its
+entries stay comparable, and that is the actual invention:
+keys from the live encoder score at chance (32.9%) while a
+0.999-momentum twin restores 95.4%, a monotone consistency law;
+on this small stage the honest audit shows the queue buying
+nothing at all (16 negatives = 4,096; plain batch-8 NT-Xent
+matches MoCo) because MoCo solves a scale problem — and the
+section closes with its four methods on one table, each a
+different answer to where the yardstick for agreement comes
+from: the batch, the ledger, the twin, or the data itself</strong>.</p>
+<hr />
+<p><em>This is Part 4 of the Self-Supervised Learning track in the Algorithms in Python series, closing the section begun with <a href="https://medium.com/p/37f7feeb811e">contrastive learning</a>, <a href="https://medium.com/p/3dd3a0792184">masked autoencoding</a> and DINO — all three retrained live inside the companion script <code>moco.py</code> in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. Section 13 opens with Word Embeddings.</em></p>
