@@ -151,7 +151,7 @@ clear explanations and Python implementations.
 ### 13 — Natural Language Processing
 | # | Algorithm | Status |
 |---|-----------|--------|
-| 1 | Word Embeddings (Word2Vec / GloVe / fastText) | ⬜ |
+| 1 | Word Embeddings (Word2Vec / GloVe / fastText) | ✅ |
 | 2 | BPE / WordPiece / SentencePiece Tokenisation | ⬜ |
 | 3 | Sequence-to-Sequence Models | ⬜ |
 | 4 | BERT-style Encoders | ⬜ |
