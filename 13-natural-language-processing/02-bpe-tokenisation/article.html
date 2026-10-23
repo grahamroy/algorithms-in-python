@@ -1,0 +1,294 @@
+<p>Part 1 ended with an insurance policy. fastText built every
+word from character 3–5-grams, and when three words that had
+never appeared in the corpus arrived for pricing, their n-gram
+vectors landed beside their singulars anyway. Morphology was
+the insurance — but the pieces were hand-chosen: every
+trigram, every 4-gram, every 5-gram, mechanically enumerated.
+A six-letter word generates 28 of them. Most are noise.</p>
+<p>This article asks a sharper question:</p>
+<pre><code>    can the corpus decide which pieces to keep?
+</code></pre>
+<p>Three algorithms, three answers. <strong>Byte-pair encoding</strong>
+(Sennrich et al., 2016) starts from individual characters and
+greedily merges the most frequent adjacent pair — repeating
+until a vocabulary budget is spent. <strong>WordPiece</strong> (Schuster &amp;
+Nakajima, 2012; used by BERT) runs the same loop but scores
+by mutual information instead of raw count: which pair is most
+<em>surprising</em> given how common each part is on its own?
+<strong>Unigram LM</strong> (Kudo, 2018; used by SentencePiece, T5, Llama)
+goes the other way entirely: start with every substring, then
+<em>prune</em> by how much each token&rsquo;s removal hurts corpus
+likelihood, until the budget is met.</p>
+<p>The stage is Part 1&rsquo;s synthetic micro-language — the same
+three topics, 106 words, 165,166 tokens — so the same words
+whose embeddings we measured can now be measured through a
+different lens: not <em>what neighbours does a word have?</em> but
+<em>what pieces should a word be built from?</em></p>
+<hr />
+<h2>A worked example: merge, score, prune, compress</h2>
+<h3>BPE: greedy merging from characters</h3>
+<p>Start from individual characters plus an end-of-word marker
+(<code>_</code>). Count every adjacent pair in the corpus. Merge the
+most frequent. Repeat.</p>
+<p>The first fifteen merges on Part 1&rsquo;s corpus:</p>
+<pre><code>    merge  1:  'h'  + 'e'    -&gt;  'he'
+    merge  2:  't'  + 'he'   -&gt;  'the'
+    merge  3:  'the'+ '_'    -&gt;  'the_'
+    merge  4:  's'  + '_'    -&gt;  's_'
+    merge  5:  'r'  + '_'    -&gt;  'r_'
+    merge  6:  'a'  + 'n'    -&gt;  'an'
+    merge  7:  'e'  + '_'    -&gt;  'e_'
+    merge  8:  's'  + 't'    -&gt;  'st'
+    merge  9:  'o'  + 'r'    -&gt;  'or'
+    merge 10:  'the'+ 'i'    -&gt;  'thei'
+    merge 11:  'thei'+'r_'   -&gt;  'their_'
+    merge 12:  'n'  + '_'    -&gt;  'n_'
+    merge 13:  'd'  + '_'    -&gt;  'd_'
+    merge 14:  'r'  + 'o'    -&gt;  'ro'
+    merge 15:  'a'  + 'r'    -&gt;  'ar'
+</code></pre>
+<p>The corpus speaks immediately. Merge 1–3 build <code>the_</code> — the
+most common word. Merges 10–11 build <code>their_</code> — the third
+most common. No rule tells BPE about English articles or
+possessives; frequency alone promotes them. By merge 200 the
+entire corpus vocabulary fits in 141 tokens, and the average
+word is 1.61 tokens long:</p>
+<pre><code>    king           -&gt; king_
+    queen          -&gt; queen_
+    harvests       -&gt; harvests_
+    navigates      -&gt; navigates_
+</code></pre>
+<p>Single tokens for common words, exactly as you would hope.
+But the real test is the words BPE has <em>never seen</em>. Part 1&rsquo;s
+three held-out plurals — never generated, zero occurrences —
+decompose into known pieces:</p>
+<pre><code>    princesses     -&gt; prince | s | s | es_   (OOV)
+    roosters       -&gt; roost | e | rs_        (OOV)
+    compasses      -&gt; compa | s | s | es_    (OOV)
+</code></pre>
+<p>Every piece was learned from other words in the corpus.
+<code>prince</code> from <em>prince</em>, <code>es_</code> from every word ending in <em>-es</em>.
+The merge table <em>is</em> the tokeniser: 200 lines that say
+&ldquo;whenever you see X next to Y, join them.&rdquo; Apply them in
+order to any new string and it decomposes — no dictionary
+lookup, no hand-written rules. The pieces the corpus chose
+are the pieces the model gets to see.</p>
+<h3>WordPiece: the same loop, a different score</h3>
+<p>WordPiece replaces raw frequency with a mutual-information
+criterion:</p>
+<pre><code>    score(a, b) = freq(ab) / (freq(a) * freq(b))
+</code></pre>
+<p>A pair scores high when it appears together more often than
+you would expect from each part&rsquo;s individual frequency. On the
+same corpus, the first fifteen merges diverge completely:</p>
+<pre><code>     #   BPE                  WordPiece
+    ---  ----                 ---------
+     1   'h'+'e'              'q'+'u'
+     2   't'+'he'             'u'+'g'
+     3   'the'+'_'            'o'+'ug'
+     4   's'+'_'              'l'+'oug'
+     5   'r'+'_'              'p'+'loug'
+     6   'a'+'n'              'u'+'l'
+     7   'e'+'_'              'b'+'ul'
+     8   's'+'t'              'bul'+'l'
+     9   'o'+'r'              'g'+'ul'
+    10   'the'+'i'            'gul'+'l'
+    11   'thei'+'r_'          'm'+'u'
+    12   'n'+'_'              'mu'+'d'
+    13   'd'+'_'              'mud'+'d'
+    14   'r'+'o'              'mudd'+'y'
+    15   'a'+'r'              'o'+'u'
+</code></pre>
+<p>BPE builds <em>the</em> first — the most frequent word. WordPiece
+builds <em>bull</em>, <em>gull</em>, <em>muddy</em> — rare words whose letter
+sequences are perfectly predictable. <code>q</code> appears only before
+<code>u</code> in this corpus, so the pair <code>q+u</code> has maximum
+mutual information despite modest count. The rare-pair bonus
+makes WordPiece greedy on morphologically informative
+fragments: it learns whole stems and suffixes earlier because
+they co-occur reliably, even when their raw count is modest.</p>
+<p>Of 200 merges, only 35 are shared. The two algorithms
+segment the same words differently:</p>
+<pre><code>    princess    BPE:       princess_
+                WordPiece: princ | e | s | s | _
+ 
+    compasses   BPE:       compa | s | s | es_
+                WordPiece: compass | e | s | _
+</code></pre>
+<p>WordPiece builds <code>compass</code> as a single piece — the stem is
+informative — while BPE keeps <code>compa</code> and <code>es_</code> separately,
+stitched from frequency. BERT chose WordPiece; GPT chose BPE.
+The difference is in which fragments get promoted, not in the
+promise: both decompose anything into known pieces.</p>
+<h3>Unigram LM: start big, prune by likelihood</h3>
+<p>BPE and WordPiece build <em>up</em> from characters. Unigram LM
+(the algorithm inside SentencePiece) goes the other way:
+start with every observed substring up to a length cap, then
+iteratively <em>prune</em>.</p>
+<p>At each round: (1) estimate token probabilities from the
+current best segmentation of every training word (EM), (2)
+score each token by how much corpus log-likelihood would drop
+if it were removed, (3) drop the least painful fraction —
+but never single characters. Repeat until the vocabulary
+budget is met.</p>
+<p>Segmentation is not merge-by-merge but global: the <strong>Viterbi
+algorithm</strong> (dynamic programming) finds the highest-probability
+tokenisation of every word under the current unigram model.</p>
+<p>Trained on Part 1&rsquo;s corpus with a target of 80 tokens:</p>
+<pre><code>    Top-5 tokens by probability:
+      'the_'    p = 0.1296
+      '_'       p = 0.0979
+      's'       p = 0.0731
+      'e'       p = 0.0662
+      'r'       p = 0.0428
+</code></pre>
+<p>The in-vocabulary words segment cleanly:</p>
+<pre><code>    king       -&gt; king_
+    queen      -&gt; queen_
+    princess   -&gt; p | rincess_
+    navigates  -&gt; n | a | vigates_
+</code></pre>
+<p>But the held-out words reveal a genuine difference in
+character. With 80 vocabulary slots and roughly 128 unique
+word forms, the Unigram model <em>memorises</em> the most frequent
+whole words and spends nothing on intermediate subword
+pieces — it never needs them for any training word. The OOV
+fallback is pure character-level:</p>
+<pre><code>    princesses -&gt; p|r|i|n|c|e|s|s|e|s|_  (OOV)
+    roosters   -&gt; r|o|o|s|t|e|r|s|_      (OOV)
+    compasses  -&gt; c|o|m|p|a|s|s|e|s|_    (OOV)
+</code></pre>
+<p>This is not a bug — it is the honest consequence of the
+algorithm&rsquo;s optimality criterion. BPE and WordPiece <em>must</em>
+pass through intermediate pieces (like <code>prince</code>, <code>roost</code>,
+<code>es_</code>) because they build bottom-up; those intermediates
+happen to be useful for OOV. Unigram, building top-down,
+never pays for pieces it does not need on the training
+corpus. At web scale — millions of unique words against tens
+of thousands of vocabulary slots — the math reverses: whole
+words will not fit, so the model learns genuinely useful
+subword pieces and OOV handling improves. The difference is
+one of <em>scale</em>, not design.</p>
+<p>Comparing all three on OOV:</p>
+<pre><code>    word          BPE                WordPiece
+    ----          ---                ---------
+    princesses    prince s s es_     princ e s s e s _
+    roosters      roost e rs_        roost e r s _
+    compasses     compa s s es_      compass e s _
+ 
+    word          Unigram (80 tokens)
+    ----          -------
+    princesses    p r i n c e s s e s _
+    roosters      r o o s t e r s _
+    compasses     c o m p a s s e s _
+</code></pre>
+<p>Three algorithms, three segmentation styles, one shared
+promise: no word is unsayable.</p>
+<h3>The compression curve</h3>
+<p>Every merge trades one vocabulary slot for shorter sequences:</p>
+<pre><code>    merges  vocab  tok/word  corpus tokens
+    ------  -----  --------  -------------
+         0     25      6.65        970,502
+        25     48      4.68        578,521
+        50     70      3.87        470,663
+       100     98      2.92        349,226
+       150    119      2.17        268,047
+       200    133      1.61        206,161
+       300    128      1.00        165,166
+</code></pre>
+<p>At zero merges every character is a token: maximum sequence
+length, minimum vocabulary. At 300 merges every word is a
+single token: minimum length, maximum vocabulary. Real
+tokenisers sit somewhere in between. GPT-4 uses roughly
+100,000 BPE tokens; Llama uses 32,000 Unigram tokens. The
+choice is architectural: a larger vocabulary means shorter
+sequences (faster attention — which is <code>O(n²)</code> in length —
+and more context per window) but a bigger embedding matrix.
+BPE&rsquo;s merge count is the single knob that sets this tradeoff.</p>
+<p>At 300 merges the vocabulary <em>shrinks</em> from 200-merge levels
+(133 → 128) because late merges subsume earlier intermediate
+tokens that are no longer needed. The vocabulary curve is not
+monotone — it peaks and then contracts as whole words replace
+their parts.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>BPE learning scans every word&rsquo;s symbol sequence once per
+merge — <code>O(M · N)</code> where <code>M</code> is the merge count and <code>N</code> the
+number of symbol pairs in the corpus. Application (encoding a
+new word) replays <code>M</code> merges over the word&rsquo;s characters:
+<code>O(M · L)</code> for a word of length <code>L</code>. WordPiece has the same
+complexity with a different scoring function. Unigram&rsquo;s
+pruning loop is heavier — each round runs Viterbi over every
+training word (<code>O(L²)</code> per word per vocabulary candidate) —
+but runs offline; at inference it is a single Viterbi pass,
+<code>O(L² · |V|)</code> in the worst case, <code>O(L²)</code> with a trie.</p>
+<p>In practice all three run in seconds on corpora with millions
+of words. Tokenisation is a <em>preprocessing</em> step: it runs
+once before training and once per input at inference, so even
+quadratic-in-word-length costs vanish against the model&rsquo;s
+own <code>O(n² · d)</code> attention. The real cost is indirect:
+vocabulary size sets the embedding matrix&rsquo;s row count, and
+sequence length sets the attention bill. The compression
+curve above <em>is</em> the complexity story — every merge shortens
+every sequence at the price of one more embedding row.</p>
+<hr />
+<h2>Where tokenisation sits</h2>
+<p>Tokenisation is the invisible first decision of every
+language model. GPT-2 (Radford et al., 2019) adopted BPE as
+its tokeniser and the field followed; BERT (Devlin et al.,
+2019) chose WordPiece; T5 (Raffel et al., 2020) and Llama
+(Touvron et al., 2023) chose SentencePiece&rsquo;s Unigram. The
+choice shapes what the model can and cannot see: the same
+sentence becomes a different number of tokens under each
+scheme, and attention&rsquo;s <code>O(n²)</code> cost means that difference
+compounds through every layer.</p>
+<p>The connection to Part 1 is direct. BPE&rsquo;s merge loop is
+fastText&rsquo;s character n-grams with a learned filter: instead
+of enumerating every 3-to-5-gram, BPE keeps only the
+substrings the corpus promotes. The Levy–Goldberg equivalence
+(SGNS = shifted PMI factorisation) showed that word embeddings
+are implicitly compressing co-occurrence statistics; BPE
+compresses the words themselves, by the same principle —
+frequent patterns get shorter codes. Sennrich et al. borrowed
+the algorithm from data compression (Gage, 1994), and the
+analogy is exact: BPE was invented to shrink files, and it
+shrinks vocabularies by the same greedy logic.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 3, <strong>Sequence-to-Sequence Models</strong>, takes these token
+sequences and asks the first generative question: given an
+input sequence, produce an output sequence. The encoder
+reads, the decoder writes, and the bridge between them —
+attention — becomes the subject. From machine translation to
+summarisation, Seq2Seq is where NLP became generative.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/13-natural-language-processing/02-bpe-tokenisation/bpe_tokenisation.py"><strong>bpe_tokenisation.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python bpe_tokenisation.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in about thirty seconds.
+Everything is from scratch: BPE&rsquo;s greedy merge loop,
+WordPiece&rsquo;s mutual-information scoring, the Unigram LM with
+Viterbi segmentation and EM-trained probabilities, and the
+compression curve that shows the vocabulary-vs-length
+tradeoff. The headline insight worth pinning to the wall:
+<strong>the corpus decides the pieces — BPE promotes frequent pairs
+(building <code>the_</code> first), WordPiece promotes surprising pairs
+(building <code>bull</code> and <code>gull</code> before <code>the</code>), and Unigram
+prunes from above by likelihood cost; all three decompose
+unseen words into known fragments, but the bottom-up methods
+(BPE, WordPiece) keep useful intermediate subword pieces by
+construction, while top-down Unigram invests its budget in
+whole words and falls back to characters for the unknown —
+an honest consequence of optimising for the training corpus,
+not for words it has never seen; the compression curve
+(6.65 tokens per word at zero merges, 1.00 at 300) is the
+single architectural knob that decides how large a model&rsquo;s
+vocabulary should be, trading embedding rows for sequence
+length against attention&rsquo;s quadratic cost</strong>.</p>
+<hr />
+<p><em>This is Part 2 of the Natural Language Processing track in the Algorithms in Python series. The companion script <code>bpe_tokenisation.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It reuses Part 1&rsquo;s synthetic micro-language (<a href="https://medium.com/p/164f7f542a3c">word embeddings</a>) and its held-out OOV words. Part 3 will look at Sequence-to-Sequence Models.</em></p>
