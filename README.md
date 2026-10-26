@@ -153,7 +153,7 @@ clear explanations and Python implementations.
 |---|-----------|--------|
 | 1 | Word Embeddings (Word2Vec / GloVe / fastText) | ✅ |
 | 2 | BPE / WordPiece / SentencePiece Tokenisation | ✅ |
-| 3 | Sequence-to-Sequence Models | ⬜ |
+| 3 | Sequence-to-Sequence Models | ✅ |
 | 4 | BERT-style Encoders | ⬜ |
 | 5 | GPT-style Decoders | ⬜ |
 | 6 | Natural Language Inference (NLI) | ⬜ |

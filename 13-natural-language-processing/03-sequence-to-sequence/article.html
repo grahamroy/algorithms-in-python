@@ -1,0 +1,260 @@
+<p>Part 2 decided which pieces a word should be built from.
+BPE merged the most frequent pairs, WordPiece merged the
+most surprising, Unigram pruned from above — three
+algorithms, one promise: every word decomposes into known
+fragments. But tokens in a row are not yet a <em>language</em>.
+A tokeniser says what the pieces are; it says nothing
+about what happens when you read a sequence of them and
+need to produce another.</p>
+<p>This article asks the next question:</p>
+<pre><code>    given an input sequence, produce an output sequence.
+</code></pre>
+<p>That is the Seq2Seq problem (Sutskever et al., 2014). An
+<strong>encoder</strong> reads the input and compresses it into a
+fixed-size vector. A <strong>decoder</strong> unrolls that vector into
+output tokens, one at a time. Everything the decoder needs
+must pass through that single vector — the <em>bottleneck</em>.</p>
+<p>Bahdanau et al. (2015) broke the bottleneck with
+<strong>attention</strong>: instead of one vector, the decoder peeks at
+every encoder state and picks what is relevant at each
+step. The model learns <em>alignment</em> — which input tokens
+matter for each output token — as a side effect.</p>
+<p>The stage is still Part 1&rsquo;s synthetic micro-language —
+107 words, three topics — but with a new task:
+<strong>word-order translation</strong> from SVO (subject-verb-object)
+to SOV (subject-object-verb), mirroring real
+English-to-Japanese/Korean translation. Short sentences
+(5–6 words) and long sentences (two clauses joined by
+&ldquo;and&rdquo;, 11–13 words) test the bottleneck: the fixed
+vector struggles on longer sequences; attention does not.</p>
+<hr />
+<h2>A worked example: encode, decode, attend</h2>
+<h3>The task: SVO to SOV</h3>
+<p>The micro-language generates SVO sentences. The
+translation task moves the verb to the end of each
+clause:</p>
+<pre><code>    the thrones crown their queen
+    -&gt; the thrones their queen crown
+ 
+    the mast drifts the ship
+    -&gt; the mast the ship drifts
+ 
+    the lord defends his banners
+    -&gt; the lord his banners defends
+</code></pre>
+<p>For long sentences — two clauses joined by &ldquo;and&rdquo; — each
+clause transforms independently:</p>
+<pre><code>    the castle crowns the king and the king defends
+    his knight
+    -&gt; the castle the king crowns and the king his
+    knight defends
+</code></pre>
+<p>The vocabulary is shared between source and target (107
+tokens). Training uses 1,500 short pairs and 750 long
+pairs; the test set has 400 short and 200 long.</p>
+<h3>The encoder-decoder architecture</h3>
+<p>The encoder is an Elman RNN that reads the source
+sequence left to right. At each step <code>t</code>, it updates a
+hidden state:</p>
+<pre><code>    h_t = tanh(W_x · x_t + W_h · h_{t-1} + b)
+</code></pre>
+<p>where <code>x_t</code> is the embedding of the current token. After
+reading the entire source, the encoder&rsquo;s final state
+<code>h_T</code> contains — in theory — everything the decoder
+needs.</p>
+<p>The decoder is a second RNN, initialised with that final
+state. At each step it receives the previous output
+token&rsquo;s embedding, updates its own hidden state, and
+predicts the next token through a softmax over the
+vocabulary:</p>
+<pre><code>    s_t = tanh(W_x · y_{t-1} + W_h · s_{t-1} + b)
+    P(y_t | y_{&lt;t}, x) = softmax(W_o · s_t + b_o)
+</code></pre>
+<p>During training the decoder sees the <em>correct</em> previous
+token (teacher forcing); during inference it feeds its
+own predictions back.</p>
+<h3>Without attention: the bottleneck</h3>
+<p>Trained for 30 epochs on all 2,250 pairs (lr = 0.002,
+Adam, gradient clipping at 5.0), the no-attention model
+converges — the loss drops from 2.05 to 0.95 — but the
+numbers tell the story:</p>
+<pre><code>    Accuracy  short:   4.5%
+    Accuracy  long:    0.0%
+</code></pre>
+<p>Not a typo. The model learns the right <em>format</em> — it
+produces sequences of the right length with real words
+— but the content is wrong:</p>
+<pre><code>    the noble ladies defend their banner
+    gold:  the noble ladies their banner defend
+    pred:  the noble kings their knight rule  (WRONG)
+ 
+    the fertile cow grazes her tractor and the islands
+    sail their harbour
+    gold:  the fertile cow her tractor grazes and the
+    islands their harbour sail
+    pred:  the deep compass the waves anchors and the
+    rooster his seed grazes  (WRONG)
+</code></pre>
+<p>The decoder receives one vector — 48 floating-point
+numbers — and must reconstruct the entire output
+sequence from it. For a 5-word sentence, that is roughly
+10 numbers per word. For a 13-word sentence, fewer than
+4. The information does not fit. The bottleneck is
+real, and it is the reason Sutskever et al.&rsquo;s original
+architecture was eventually replaced.</p>
+<h3>With attention: the bottleneck breaks</h3>
+<p>Bahdanau attention gives the decoder a window into the
+full encoder. At each decoding step, the model computes
+an <em>attention score</em> for every encoder state, then takes
+a weighted sum:</p>
+<pre><code>    e_j = v^T · tanh(W_a · h_j + U_a · s_{t-1})
+    a_j = softmax(e)_j
+    c_t = sum_j  a_j · h_j
+</code></pre>
+<p>The decoder&rsquo;s input becomes the concatenation of the
+previous token&rsquo;s embedding and the context vector <code>c_t</code>.
+Now the decoder can <em>reach back</em> into the encoder at
+every step — it is no longer bottlenecked.</p>
+<p>Same architecture (d_emb = 32, d_hid = 48), same
+training regime, same data. The loss drops from 1.96
+to 0.001:</p>
+<pre><code>    Accuracy  short: 100.0%
+    Accuracy  long:   99.5%
+</code></pre>
+<p>From 4.5% to 100% on short sequences, from 0.0% to
+99.5% on long ones. The only change: attention.</p>
+<pre><code>    the distant tides navigate their island
+    gold:  the distant tides their island navigate
+    pred:  the distant tides their island navigate  (ok)
+ 
+    the fertile cow grazes her tractor and the islands
+    sail their harbour
+    gold:  the fertile cow her tractor grazes and the
+    islands their harbour sail
+    pred:  the fertile cow her tractor grazes and the
+    islands their harbour sail  (ok)
+</code></pre>
+<h3>The attention receipt</h3>
+<p>The attention weights are readable — they show where the
+decoder <em>looks</em> when producing each output token:</p>
+<p>![[ATTENTION TABLE IMAGE]]</p>
+<p>Each row is one decoding step; each column is one encoder
+position. Read down the columns: <code>distant</code> in the output
+attends 0.99 to <code>distant</code> in the input. <code>tides</code> attends
+0.99 to <code>tides</code>. <code>island</code> attends 0.99 to <code>island</code>.</p>
+<p>The interesting row is <code>navigate</code> — the verb in the
+output, which must move from the middle of the input
+(position 4) to the end of the output (position 6). The
+decoder assigns 1.00 to the verb&rsquo;s encoder position.
+The model learned the alignment between input and output
+positions as a side effect of the translation task.</p>
+<p>This is the same &ldquo;receipt&rdquo; idea from Part 4 of the Deep
+Learning track (Attention Mechanisms): attention weights
+are human-readable because they sum to 1 and concentrate
+where the model finds information. The difference is
+that here, the receipt spans <em>two</em> sequences — encoder
+and decoder — rather than self-attending within one.</p>
+<hr />
+<h2>The bottleneck receipt</h2>
+<pre><code>                        short     long
+                        -----     ----
+    no attention        4.5%    0.0%
+    attention         100.0%   99.5%
+</code></pre>
+<p>Without attention, everything the decoder needs must pass
+through one vector. Short sequences survive the
+compression; long ones do not. Attention lets the decoder
+reach back into the encoder at every step — the
+bottleneck breaks, and accuracy on long sequences
+recovers.</p>
+<p>The loss curves tell the same story. Without attention,
+the loss plateaus at 0.95 — the model cannot compress
+long sequences into one vector, so it learns a generic
+output distribution instead. With attention, the loss
+reaches 0.001 — the model finds the exact mapping.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>The encoder runs one RNN step per source token:
+<code>O(T · d²)</code> where <code>T</code> is source length and <code>d</code> the
+hidden dimension (the matrix-vector product at each step
+is <code>O(d²)</code>). The decoder runs one RNN step per target
+token: <code>O(T' · d²)</code>. Attention adds <code>O(T' · T · d)</code> —
+at each of <code>T'</code> decoding steps, we score all <code>T</code> encoder
+states. Total: <code>O((T + T') · d² + T' · T · d)</code>.</p>
+<p>For comparison, the Transformer (Part 5 of the Deep
+Learning track) replaces the sequential RNN with
+parallel self-attention: <code>O(n² · d)</code> where <code>n</code> is the
+full sequence length. Seq2Seq&rsquo;s RNN is cheaper per-step
+but inherently sequential — each hidden state depends on
+the previous one, so the encoder cannot be parallelised.
+This is the architectural bottleneck that the Transformer
+removed, and the reason Seq2Seq is no longer the
+dominant paradigm. But the encoder-decoder <em>structure</em>
+survived: T5, BART, and machine translation models
+still use it.</p>
+<hr />
+<h2>Where Seq2Seq sits</h2>
+<p>Seq2Seq (Sutskever et al., 2014) launched neural machine
+translation. The original paper used LSTMs and reversed
+the source sentence to help the decoder; Bahdanau et al.
+(2015) added attention and the field never looked back.
+Google&rsquo;s Neural Machine Translation system (Wu et al.,
+2016) scaled the idea to production, and for three years
+Seq2Seq with attention was the state of the art for
+translation, summarisation, and dialogue.</p>
+<p>The connection to this series is direct. Part 1 built
+word embeddings — dense vectors that encode meaning.
+Part 2 decided which subword pieces to use. This part
+takes sequences of those pieces and produces new
+sequences from them. The encoder is the same RNN from
+Part 3 of the Deep Learning track (RNN / LSTM / GRU);
+the attention mechanism is Part 4&rsquo;s; the decoder is the
+autoregressive generation pattern that GPT will later
+use without an encoder. Seq2Seq is where NLP became
+<em>generative</em> — the first architecture that could read
+a sentence and write a different one.</p>
+<p>The two halves became the building blocks of everything
+that followed. BERT (Part 4, next) is the encoder: it
+reads bidirectionally and produces contextual
+representations. GPT (Part 5) is the decoder: it writes
+left-to-right, one token at a time. The Transformer
+kept the encoder-decoder split but replaced the RNN with
+self-attention — and that is the architecture we will
+reach in two parts.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 4, <strong>BERT-style Encoders</strong>, takes the encoder half
+of Seq2Seq and asks: what if we <em>only</em> encode? Masked
+language modelling, bidirectional context, and the
+pre-train-then-fine-tune paradigm that made transfer
+learning the default in NLP.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/13-natural-language-processing/03-sequence-to-sequence/seq2seq.py"><strong>seq2seq.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python seq2seq.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in about two minutes.
+Everything is from scratch: the Elman RNN encoder,
+Bahdanau attention with learned alignment, the decoder
+with teacher forcing and greedy inference, hand-derived
+BPTT gradients audited against central differences
+(worst-case relative error: 1.05e-06), and Adam with
+gradient clipping. The headline insight worth pinning to
+the wall: <strong>the encoder-decoder bottleneck is real and
+measurable — 4.5% accuracy on short sequences and 0.0%
+on long ones when the decoder has only one vector to
+work with; 100% and 99.5% when attention lets it reach
+back into the encoder at every step; the attention
+weights are human-readable (the verb in the output
+attends 1.00 to the verb in the input, nouns attend
+0.99 to their source positions), making the model&rsquo;s
+alignment decisions as transparent as a lookup table;
+this is the architecture that launched neural machine
+translation and whose two halves — encoder and decoder
+— became BERT and GPT</strong>.</p>
+<hr />
+<p><em>This is Part 3 of the Natural Language Processing track in the Algorithms in Python series. The companion script <code>seq2seq.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It reuses Part 1&rsquo;s synthetic micro-language (<a href="https://medium.com/p/164f7f542a3c">word embeddings</a>, <a href="https://medium.com/p/5e6a51341455">BPE tokenisation</a>). Part 4 will look at BERT-style Encoders.</em></p>
