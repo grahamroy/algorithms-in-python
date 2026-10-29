@@ -4,6 +4,9 @@ _bridge.html
 # Transient manifest of pending drafts (regenerable)
 _manifest.html
 
+# Transient per-draft DOM check snippet (regenerable)
+_check.js
+
 # Companion-script run outputs (reproducible from the .py files)
 *_results.png
 

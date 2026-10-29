@@ -1,0 +1,290 @@
+<p>Part 3 built a machine with two halves. The encoder read a
+sentence; the decoder wrote a new one; attention was the
+bridge between them. The article ended by pointing at the
+halves and naming their descendants: BERT is the encoder,
+GPT is the decoder.</p>
+<p>This one throws the decoder away.</p>
+<p>What is left is a stack that reads a sequence and emits a
+vector per position — and immediately a problem. A decoder
+trains itself on raw text for free: predict the next token,
+and every token in the corpus is a labelled example.
+An encoder has no next token. It has no output to compare
+against. So what do you train it on?</p>
+<pre><code>    hide a word, and predict it from what surrounds it
+</code></pre>
+<p>That is <strong>masked language modelling</strong>, and it is the whole
+idea behind BERT (Devlin et al., 2019). It is also Section
+12&rsquo;s masked autoencoder, one modality over: hide part of
+the input, reconstruct it, and the representations you
+needed in order to reconstruct turn out to be the ones you
+wanted all along.</p>
+<p>Hiding a word has one consequence a decoder can never have.
+Once the target is in the middle rather than at the end, the
+model is free to read <em>forward</em> as well as back — and the
+causal mask, which Part 3 needed so the decoder could not
+cheat, becomes pure loss. BERT deletes it. Every position
+attends to every other, in both directions.</p>
+<p>The stage is still Part 1&rsquo;s synthetic micro-language, and it
+was built for exactly this measurement. Agreement in that
+language is carried by the verb form and the possessive,
+both of which sit to the <strong>right</strong> of the subject:</p>
+<pre><code>    the king   rules  his    crown
+    the kings  rule   their  crown
+</code></pre>
+<p>So hide the subject and the evidence for its number and
+gender lies ahead of the gap, where only a bidirectional
+reader can find it. Hide the possessive and the evidence
+lies behind it, where anyone can. One corpus, two slots,
+opposite verdicts — and no folklore required.</p>
+<hr />
+<h2>A worked example: hide, predict, transfer</h2>
+<h3>The pretext and its recipe</h3>
+<p>Every sentence gets a <code>[CLS]</code> token in front and padding to
+seven positions. Then 15% of the word positions are chosen,
+and the input is corrupted at them — 80% become <code>[MASK]</code>,
+10% become a random word, and 10% are left exactly as they
+were. The model predicts the original token at every chosen
+position:</p>
+<pre><code>    [CLS] the &lt;[MASK]&gt; &lt;[MASK]&gt; their queen
+    [CLS] the mast drifts &lt;[MASK]&gt; ship
+    [CLS] the &lt;swords&gt; defends his banners
+    [CLS] the rooster harvests &lt;[MASK]&gt; seed
+</code></pre>
+<p>Angle brackets mark the chosen positions. The third line
+shows the random replacement — <code>swords</code> is standing where
+<code>lord</code> was — and the fourth kind of corruption, the 10% left
+untouched, is the subtle one: a position may be scored
+without being visibly disturbed, so the model can never
+assume that what it reads is what it should keep.</p>
+<p>Three encoders are pre-trained for 1,500 steps each: a
+bidirectional one, a causal one wearing Part 3&rsquo;s triangular
+mask, and a bidirectional one whose corruption is 100%
+<code>[MASK]</code>. All three are 2 layers, 4 heads, d=64 — 114,223
+parameters. The masked-LM loss, in nats, against 4.69 for a
+uniform guess over the 109-token vocabulary:</p>
+<p>![[LOSS CURVE IMAGE]]</p>
+<p>Those are per-batch losses, which is why they wobble rather
+than descend politely. The floor is not zero and should not
+be: a masked subject is genuinely ambiguous — twelve nouns
+could fill it — so part of that loss is irreducible. The gap
+between the bidirectional and causal curves is the part that
+is not.</p>
+<p>Keep an eye on the third curve, because it matters later: the
+100%-<code>[MASK]</code> encoder reaches the <em>lowest</em> loss of the three,
+and — as the last section measures — transfers the worst.
+Pre-training loss is a progress bar, not a target.</p>
+<h3>What bidirectionality actually buys</h3>
+<p>Mask one slot at a time in 1,000 held-out sentences and
+score the prediction against ground truth:</p>
+<p>![[RECEIPT TABLE IMAGE]]</p>
+<p>Read it by the middle column. Where the evidence lies to the
+left, the two models are identical — both get the verb&rsquo;s
+number and the possessive exactly right, every time. Where
+the evidence lies to the right, the causal model collapses:
+66.7% on the subject&rsquo;s number, which is precisely the base
+rate for guessing <em>singular</em> every time, and 20.6% on
+gender, which is worse than it sounds given that most
+subjects have no gender to get wrong.</p>
+<p>The causal model is not looking in the wrong place. There is
+no place to look.</p>
+<pre><code>the distant [MASK] navigate their island
+  gold: tides | bidir: tides | causal: compass
+ 
+the noble [MASK] defend their banner
+  gold: ladies | bidir: lords | causal: princess
+ 
+the muddy [MASK] feeds the barns
+  gold: plough | bidir: plough | causal: hen
+</code></pre>
+<p>Neither model can be certain <em>which</em> noun was hidden — and
+the honest row in that table is the fourth one, where even
+the bidirectional model gets the exact word only 45.5% of
+the time. It is not guessing blindly: Part 1&rsquo;s role
+signatures mean the object is the subject&rsquo;s signature
+partner half the time, which is almost exactly the accuracy
+we measure. What the bidirectional model reliably recovers
+is the <em>grammar</em> — right number, right gender, right topic,
+often the wrong noun.</p>
+<p>And the receipt is readable, as it has been since Part 4 of
+the Deep Learning track. Mean attention out of the masked
+position, averaged over heads:</p>
+<p>![[ATTENTION TABLE IMAGE]]</p>
+<p>Layer 0 of the bidirectional model spreads its attention
+evenly over the content words on both sides of the gap;
+layer 1 concentrates half its weight on <code>their</code>, the token
+that carries the number. The causal model&rsquo;s rows are zero
+everywhere below the mask, because the mask forbids it — so
+it spends its attention on the adjective behind it and on
+the gap itself.</p>
+<h3>Pre-train once, then spend labels</h3>
+<p>Pre-training is a means, not an end. The end is a task with
+few labels. Here it is agreement acceptability — a
+miniature of CoLA, the linguistic-acceptability task in
+BERT&rsquo;s own GLUE benchmark. Half the sentences are generated
+normally; half have their agreement broken:</p>
+<pre><code>    ok   the islands drift their storm
+    bad  the noble banner defend the lords
+    bad  the island navigates their captains
+    ok   the wooden fence feeds the cow
+</code></pre>
+<p>Every word is in vocabulary and every sentence has the right
+shape; only the agreement is wrong. Chance is 50%. Three
+conditions get the same labels and the same 600 held-out
+test sentences: the same architecture trained from scratch,
+the pre-trained encoder with everything frozen except a
+classifier head on <code>[CLS]</code>, and the pre-trained encoder
+fine-tuned end to end.</p>
+<p>![[LABELS TABLE IMAGE]]</p>
+<p>At 100 labels, fine-tuning is 24 points ahead of the
+identical architecture trained from scratch — roughly where
+from-scratch gets with four times the labels. The
+pre-trained encoder has never seen a label and never seen an
+ungrammatical sentence. What it has is representations in
+which agreement is already encoded, because predicting a
+masked possessive <em>requires</em> knowing the subject&rsquo;s number.</p>
+<p>The frozen probe is the control, and it is the interesting
+failure. It never gets past 62%, at any label count. The
+information is in there — fine-tuning the same weights
+reaches 95.5% — but it is not linearly readable off the
+<code>[CLS]</code> vector, because nothing in masked language
+modelling ever gave <code>[CLS]</code> a job. That is the gap BERT&rsquo;s
+second pre-training task, next-sentence prediction, was
+there to fill. RoBERTa later dropped NSP and leaned on
+fine-tuning instead, which is the column that works here
+too. Mean-pooling the token vectors rather than reading
+<code>[CLS]</code> does measurably better at this scale — 88.2% at 100
+labels against 80.0%. <code>[CLS]</code> is a convention, not a
+mechanism.</p>
+<h3>The head was the bottleneck</h3>
+<p>There is a cheaper route, and it is the result I did not
+expect to be this stark. Score a sentence by masking each
+position in turn and summing the log probability of the word
+that was really there — the pseudo-log-likelihood (Salazar
+et al., 2020). No new parameters at all; the masked-LM head
+already has an opinion:</p>
+<p>![[PLL TABLE IMAGE]]</p>
+<p>Twenty labels spent on fitting a single threshold beat
+twenty labels spent on fine-tuning a classifier head, 90.5%
+to 54.8%. The knowledge was in the encoder the whole time;
+the randomly-initialised head was the bottleneck.</p>
+<p>Honesty about the second row: the causal model scores these
+sentences <em>better</em>. Every violation in this task is local
+and visible from the left — a plural verb after a singular
+subject is improbable to a left-to-right reader too. That is
+not a crack in the earlier result, it is the boundary of it.
+Bidirectionality is not a general superiority; it is an
+advantage exactly where the evidence lies ahead, which is
+what the fill-the-gap table measures and this task does not.</p>
+<h3>Why 80/10/10 and not 100% [MASK]</h3>
+<p>The usual story about the 10% random replacement is that
+without it the model would simply trust whatever word it is
+shown, having only ever been asked about <code>[MASK]</code>. That
+story is testable. Replace a subject with a noun from a
+different topic, with no <code>[MASK]</code> anywhere in the sentence,
+and read the masked-LM head at that position:</p>
+<p>![[RECIPE TABLE IMAGE]]</p>
+<p>The folklore is wrong, at least here. Neither model echoes
+the word it was shown. Trained only ever to replace
+<code>[MASK]</code>, the 100%-mask encoder still overrules a real token
+that does not fit — it just does it less precisely, losing
+ten points of topic accuracy. Downstream, fine-tuned on the
+acceptability task, the gap persists but stays modest: 67.2%
+against 61.0% at 50 labels, 80.0% against 70.8% at 100.</p>
+<p>The direction matches BERT&rsquo;s ablation; the magnitude is a
+few points on 600 test sentences and is not a result to bet
+on. The recipe&rsquo;s published justification rests on ablations
+over corpora a hundred million times this size. Reproducing
+the direction is worth something. Reproducing the magnitude
+would need BERT&rsquo;s budget.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>Self-attention costs <code>O(n² · d)</code> per layer and the
+feed-forward block <code>O(n · d²)</code>, so an <code>L</code>-layer encoder
+forward is <code>O(L · n(n·d + d²))</code> — the same arithmetic as the
+Transformer in Part 5 of the Deep Learning track, minus the
+triangular mask. Dropping that mask costs nothing: the
+scores are computed either way, and the mask only overwrites
+half of them.</p>
+<p>Two rows deserve more than a glance. The first is <strong>signal
+per pass</strong>: masked language modelling is trained on 15% of
+positions, where a causal language model gets a gradient
+from every token in the sequence. BERT pays for its
+bidirectionality in sample efficiency, which is why
+pre-training it takes more passes over more text than
+training a decoder of the same size.</p>
+<p>The second is <strong>scoring</strong>. A causal model scores a sentence
+in one forward pass, because its probabilities factorise
+left to right. BERT has no such factorisation — scoring the
+sentence above took <code>O(n)</code> forward passes, one per masked
+position. The same property that makes an encoder good at
+reading makes it bad at generating, and no amount of
+engineering gets around it. BERT cannot write.</p>
+<hr />
+<h2>Where BERT sits</h2>
+<p>BERT (Devlin et al., 2019) did not introduce the
+Transformer, attention, or masking. It introduced a
+<em>default</em>: pre-train one large encoder on unlabelled text,
+then fine-tune it on whatever small labelled task you have.
+Before BERT, a new NLP task meant a new architecture and a
+corpus to go with it. After it, the task meant a head and a
+few thousand labels. The GLUE leaderboard turned over in
+months.</p>
+<p>The lineage in this series is direct. Part 1 built word
+vectors that were <em>static</em> — <code>bank</code> had one vector whether
+it sat by a river or held your money. Part 2 decided which
+subword pieces words decompose into; BERT&rsquo;s WordPiece is
+literally Part 2&rsquo;s second algorithm. Part 3 built the
+encoder-decoder pair, and this article keeps the encoder,
+deletes the mask, and swaps the training signal from
+translation to reconstruction. The result is the thing word
+embeddings could not be: a vector <em>per occurrence</em>, computed
+from the company that particular word is keeping.</p>
+<p>What BERT&rsquo;s descendants changed was mostly the recipe, not
+the machine. RoBERTa dropped NSP, trained longer, and masked
+dynamically. ALBERT shared parameters across layers.
+DeBERTa disentangled content from position. ELECTRA
+replaced masked prediction with corruption detection — which
+is, almost exactly, the acceptability task above. The
+encoder stayed where it was.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 5, <strong>GPT-style Decoders</strong>, takes the other half. The
+causal mask comes back, and with it the one thing this
+article&rsquo;s encoder cannot do: generate. The question is what
+you gain when the price of reading only backwards is paid
+willingly — a gradient from every token, a sentence scored
+in one pass, and text that runs on past its prompt.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/13-natural-language-processing/04-bert-style-encoders/bert_encoder.py"><strong>bert_encoder.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python bert_encoder.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in about four minutes.
+Everything is from scratch: bidirectional multi-head
+self-attention with a padding mask, LayerNorm, learned
+positional embeddings, the masked-LM head and the <code>[CLS]</code>
+head, the 80/10/10 corruption recipe, fine-tuning and frozen
+probing, and pseudo-log-likelihood scoring — all
+hand-differentiated and audited against central differences
+at startup (worst error 8.22e-10 over 330 sampled
+gradients). The headline insight worth pinning to the wall:
+<strong>bidirectionality is not a general improvement, it is a
+precisely located one — on the slots whose evidence lies to
+the left, a causal encoder ties the bidirectional one at
+100%, and on the slot whose evidence lies to the right it
+scores 66.7%, which is exactly the base rate for guessing
+the majority class, against 99.8%; the pre-training that
+buys this also buys transfer, taking a 100-label task from
+55.7% to 80.0%, but the frozen probe never passes 62%,
+because masked language modelling gives <code>[CLS]</code> nothing to
+do — which is what next-sentence prediction was for, and why
+fine-tuning, not probing, is how BERT is used; and the
+cheapest route of all skips the head entirely, scoring
+sentences straight from the masked-LM output at 90.5% with
+twenty labels spent on a single threshold</strong>.</p>
+<hr />
+<p><em>This is Part 4 of the Natural Language Processing track in the Algorithms in Python series. The companion script <code>bert_encoder.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It reuses Part 1&rsquo;s synthetic micro-language (<a href="https://medium.com/p/164f7f542a3c">word embeddings</a>, <a href="https://medium.com/p/5e6a51341455">BPE tokenisation</a>, <a href="https://medium.com/p/bbdf65112819">sequence-to-sequence</a>). Part 5 will look at GPT-style Decoders.</em></p>
