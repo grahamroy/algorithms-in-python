@@ -155,7 +155,7 @@ clear explanations and Python implementations.
 | 2 | BPE / WordPiece / SentencePiece Tokenisation | ✅ |
 | 3 | Sequence-to-Sequence Models | ✅ |
 | 4 | BERT-style Encoders | ✅ |
-| 5 | GPT-style Decoders | ⬜ |
+| 5 | GPT-style Decoders | ✅ |
 | 6 | Natural Language Inference (NLI) | ⬜ |
 | 7 | Natural Language Generation (NLG) | ⬜ |
 | 8 | Retrieval-Augmented Generation (RAG) | ⬜ |
