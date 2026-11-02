@@ -156,7 +156,7 @@ clear explanations and Python implementations.
 | 3 | Sequence-to-Sequence Models | ✅ |
 | 4 | BERT-style Encoders | ✅ |
 | 5 | GPT-style Decoders | ✅ |
-| 6 | Natural Language Inference (NLI) | ⬜ |
+| 6 | Natural Language Inference (NLI) | ✅ |
 | 7 | Natural Language Generation (NLG) | ⬜ |
 | 8 | Retrieval-Augmented Generation (RAG) | ⬜ |
 | 9 | Fine-tuning & LoRA | ⬜ |
