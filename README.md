@@ -166,7 +166,7 @@ clear explanations and Python implementations.
 ### 14 — Computer Vision
 | # | Algorithm | Status |
 |---|-----------|--------|
-| 1 | Image Classification (ResNet / EfficientNet / ViT) | ⬜ |
+| 1 | Image Classification (ResNet / EfficientNet / ViT) | ✅ |
 | 2 | Object Detection (YOLO / R-CNN family) | ⬜ |
 | 3 | Semantic Segmentation (U-Net) | ⬜ |
 | 4 | Generative Vision (StyleGAN / Stable Diffusion) | ⬜ |

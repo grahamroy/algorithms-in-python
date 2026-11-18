@@ -1,0 +1,184 @@
+<p>The Natural Language Processing track spent eleven parts on a
+micro-language whose 31,740 sentences could be listed, which
+meant every claim had an oracle to check it against. Images
+need their own version of that, and this section&rsquo;s is simpler
+than it sounds: the pictures here are <strong>drawn</strong> from factors
+the script chooses.</p>
+<pre><code>class, centre (cy, cx), size, brightness
+</code></pre>
+<p>So the thing a vision model is supposed to ignore is not
+something to be inferred afterwards. It is an input. That
+turns the central question of this article from an argument
+into a measurement.</p>
+<p>The question is what an architecture&rsquo;s <strong>prior</strong> is worth. A
+multilayer perceptron sees 256 unrelated numbers. A
+convolution is told, before it sees any data, that pixels
+near each other belong together and that a pattern means the
+same thing wherever it appears. A residual network is told it
+may skip a layer. A vision transformer is told almost
+nothing.</p>
+<hr />
+<h2>A worked example: four priors, one budget</h2>
+<h3>The stage</h3>
+<p>Six shapes on a 16×16 canvas, chosen so their pixel
+statistics overlap — a cross and a vertical bar share
+strokes, a hollow square and a corner L share two sides — so
+that only <strong>geometry</strong> settles the class. Guessing scores
+0.1667.</p>
+<p>![[STAGE IMAGE]]</p>
+<p>Four models, matched to within <strong>4.4%</strong> on parameter count,
+each given the same 400 gradient steps at every training-set
+size. What differs is only what each was told in advance:</p>
+<pre><code>MLP      nothing: 256 numbers in a row
+CNN      pixels nearby belong together; patterns repeat
+ResNet   the same, plus: you may skip a layer
+ViT      patches are a sequence; work it out
+</code></pre>
+<p>Matching the budgets matters more than it might appear. My
+first run of this comparison had the residual network beating
+the convolution handily — on five times the parameters. Equal
+capacity reverses the result, and the reversal is the
+interesting part.</p>
+<h3>The price of a prior, measured in labels</h3>
+<p>![[ACCURACY TABLE IMAGE]]</p>
+<p>From <strong>60 labels</strong> the convolution is at <strong>0.9271</strong>. The
+perceptron, holding the same number of parameters, is at
+<strong>0.3064</strong> — and after sixteen times the data it has reached
+only <strong>0.6276</strong>, still well below what the convolution
+managed from sixty examples.</p>
+<p>That gap is the prior, and it was not bought with capacity.
+Both models have about 5,500 parameters. One of them was
+simply told something true about images before training
+began.</p>
+<p>The transformer sits between the two: 0.4500 at 60 labels,
+0.8658 at 960. It is not broken. It is <strong>learning from data
+what the convolution was told for free</strong>, and paying for it
+in examples — which is exactly the behaviour that makes
+vision transformers excellent at scale and poor below it.</p>
+<p>Then the result I did not expect. <strong>The residual network
+loses to the plain convolution at every small size</strong> —
+0.8896 against 0.9271 at 60 labels, a gap of about fifteen
+standard errors. By 960 labels it has drawn level
+(+0.0002). Depth costs 0.0376 early here and repays almost
+none of it.</p>
+<h3>Does it change its mind when the object moves?</h3>
+<p>This is the measurement the stage was built for. Because the
+script chose the centre, the same shape can be re-rendered at
+<strong>every legal position</strong> and each model asked whether its
+answer survives the move. A score of 1.0000 means position is
+ignored completely.</p>
+<p>![[INVARIANCE TABLE IMAGE]]</p>
+<p>Read the convolution&rsquo;s row. Not &ldquo;approximately&rdquo;. Not &ldquo;within
+noise&rdquo;. <strong>1.0000, with a standard deviation across seeds of
+0.0000.</strong> Global max-pooling takes the strongest filter
+response wherever it occurs, so moving the object cannot
+change the answer. The property is not learned, and no amount
+of training would improve it, because it is arithmetic.</p>
+<p>Now the transformer: <strong>0.9445</strong> at margin 0 and <strong>0.9505</strong>
+with the border cleared. Clearing the border does not rescue
+it, because the border was never its problem. It has an
+approximation fitted from examples — roughly right
+everywhere, exactly right nowhere.</p>
+<p>That is the whole difference between a prior and a learned
+regularity, and this stage can show it only because the
+position was an input rather than a guess.</p>
+<p>The residual network is worth a glance too: 0.9991 at margin
+0, 1.0000 with two pixels of clearance. Its padded
+convolutions see a little of the canvas edge, and that is the
+one place its construction stops applying.</p>
+<h3>Where should the parameters go?</h3>
+<p>![[SCALING TABLE IMAGE]]</p>
+<p>The same residual network reshaped three ways at one budget.
+This is EfficientNet&rsquo;s question minus one axis — resolution
+is fixed at 16×16 here, so the study covers depth against
+width only, and says so.</p>
+<p>Wider and shallower wins, and wins hardest where the data is
+thinnest: <strong>0.9716 against 0.8751</strong> at 120 labels, closing to
+0.9984 against 0.9949 once there is plenty. Look at the
+spread as well — <strong>0.0096 for the shallow model against
+0.0498 for the deep one</strong> at 120 labels. Depth does not only
+cost accuracy here, it costs reliability.</p>
+<p>The honest reading is not that depth is bad. Depth is a
+<strong>bet</strong> — on the data having structure at several scales, so
+that later blocks have something built by earlier ones to
+work on. Six shapes on a 16×16 grid have one scale, so the
+bet does not pay. On photographs it does, which is precisely
+why real residual networks are deep and this one should not
+be.</p>
+<hr />
+<h2>Big-O and complexity</h2>
+<p>![[BIG-O TABLE IMAGE]]</p>
+<p>The line worth noticing is the first pair. A dense layer on
+an <code>S×S</code> image costs <code>S²·H</code> parameters; a convolution costs
+<code>k²·F</code> regardless of how big the image is. At 16×16 that is
+the difference between 5,529 parameters buying one hidden
+layer of 21 units and 5,446 buying 170 independent 5×5
+feature detectors.</p>
+<p>Weight sharing is not a memory optimisation that happens to
+help accuracy. It is the <em>statement</em> that a pattern means the
+same thing everywhere, and the parameter saving is what that
+statement costs to make.</p>
+<hr />
+<h2>Where this sits</h2>
+<p>LeCun&rsquo;s convolutional networks date from 1989, and the
+argument for them was always the one measured above: build
+the invariance in rather than learn it. ResNet arrived in
+2015 to solve a problem this article&rsquo;s stage does not have —
+that beyond a couple of dozen layers, plain deep networks got
+<em>worse</em>, and the skip connection fixed it by letting a block
+start as the identity. EfficientNet asked in 2019 how to
+spend a fixed budget across depth, width and resolution
+together rather than one at a time.</p>
+<p>Vision transformers came in 2020 with the opposite bet:
+discard the locality prior, treat patches as a sequence, and
+let attention learn the structure. The finding that followed
+them is the one reproduced here — they need far more data
+than convolutions to reach the same place, because they are
+reconstructing from examples what a convolution is given for
+free.</p>
+<p>The thread back through this series is Part 2 of Section 11,
+which measured the same trade on two spirals and found that
+priors beat flexibility at low data. This article prices that
+in two currencies at once — labels and parameters — and adds
+the thing that stage could not provide: an exact measurement
+of what the prior actually <em>is</em>.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 2, <strong>Object Detection</strong>, breaks the assumption every
+model here relied on: that there is exactly one thing in the
+picture and the only question is what it is. Once an image
+may contain several objects, or none, the output stops being
+a label and becomes a variable-length list of boxes — and the
+loss has to be rebuilt before anything can be trained at all.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/14-computer-vision/01-image-classification/imgcls.py"><strong>imgcls.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python imgcls.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in about ten minutes.
+Everything is from scratch: im2col convolution, same-padded
+residual blocks with max-pooling, patch embedding with
+multi-head self-attention, and a shared Adam so the
+comparison is of architectures rather than optimisers — all
+hand-differentiated and audited against central differences
+at startup (worst error 6.46e-10 over 128 sampled gradients),
+with a self-test that proves the stage conserves ink under
+translation, which is the premise the invariance measurement
+rests on. The headline insight worth pinning to the wall: <strong>a
+convolution and a perceptron with the same 5,500 parameters
+and the same training budget score 0.9271 and 0.3064 on sixty
+labels, and the perceptron never catches up — because the
+convolution was told, before it saw anything, that a pattern
+means the same thing wherever it appears; and that telling is
+exact rather than approximate, which this stage can prove by
+re-rendering one shape at every legal position and finding
+the convolution&rsquo;s answer unchanged 1.0000 of the time with
+zero variance across seeds, while a vision transformer given
+the identical images manages 0.9505 and never improves,
+because it is approximating from examples what the other was
+handed for free</strong>.</p>
+<hr />
+<p><em>This is Part 1 of the Computer Vision track in the Algorithms in Python series. The companion script <code>imgcls.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It extends the &ldquo;shape world&rdquo; stage introduced in <a href="https://medium.com/p/37f7feeb811e">contrastive learning</a>, and picks up the prior-versus-flexibility thread from <a href="https://medium.com/p/6f860b54044f">convolutional neural networks</a>. Part 2 will look at Object Detection.</em></p>
