@@ -4,7 +4,7 @@
 
 ![[HEADER]]
 
-Part 1 of this section put four architectures — a perceptron, a convolution, a residual network and a vision transformer — on the same question and measured what each one's prior was worth. Every one of them ended the same way: a softmax over six classes, trained against the label the stage had drawn from. The target was never in doubt. It was simply *there*, one per image, waiting to be compared against.
+[Part 1 of this section](https://medium.com/@grahamjroy/image-classification-what-a-prior-is-worth-a00de66cfa5e) put four architectures — a perceptron, a convolution, a residual network and a vision transformer — on the same question and measured what each one's prior was worth. Every one of them ended the same way: a softmax over six classes, trained against the label the stage had drawn from. The target was never in doubt. It was simply *there*, one per image, waiting to be compared against.
 
 Now put two shapes on the canvas.
 
@@ -236,6 +236,6 @@ What does survive the simplification is the shape of the problem. There is no ta
 
 *Part 2 of Section 14. The full script — stage, four hand-differentiated layers, three assignment rules, an exact bipartite matcher and every measurement above — is on [GitHub](https://github.com/grahamroy/algorithms-in-python).*
 
-*Previously in this series: [Fine-Tuning and LoRA — The Update Is Not Low-Rank](https://medium.com/@grahamjroy/fine-tuning-and-lora-the-update-is-not-low-rank-048d50f039aa), [Retrieval-Augmented Generation — Reading or Reciting?](https://medium.com/@grahamjroy/retrieval-augmented-generation-reading-or-reciting-0686445e3d97), [Natural Language Generation — The Cost of Sounding Correct](https://medium.com/@grahamjroy/natural-language-generation-the-cost-of-sounding-correct-48a45ec5b396).*
+*Previously: [Image Classification — What a Prior Is Worth](https://medium.com/@grahamjroy/image-classification-what-a-prior-is-worth-a00de66cfa5e), which built the shape world this article extends and measured what a convolution's prior buys at sixty labels. Before that: [Fine-Tuning and LoRA — The Update Is Not Low-Rank](https://medium.com/@grahamjroy/fine-tuning-and-lora-the-update-is-not-low-rank-048d50f039aa) and [Retrieval-Augmented Generation — Reading or Reciting?](https://medium.com/@grahamjroy/retrieval-augmented-generation-reading-or-reciting-0686445e3d97).*
 
 *Next, Part 3 — Semantic Segmentation. Assignment dissolves: when every pixel carries its own label the target comes back, handed to you for free. What replaces it is a different problem entirely, because the thing a convolution throws away in order to recognise objects is exactly the thing you now have to give back.*
