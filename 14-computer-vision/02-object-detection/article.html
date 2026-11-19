@@ -133,6 +133,43 @@ hungarian       0.9507              0.6973
 <p>The <code>many</code> rule here is also the one-to-many <em>principle</em>, not a faithful RetinaNet: no anchor priors of differing scale and aspect, no IoU-threshold matching against them. A real anchor detector has machinery, precisely because the naive version behaves the way the table shows.</p>
 <p>What does survive the simplification is the shape of the problem. There is no target until a rule invents one; that rule decides whether you get silence or duplicates; and the post-processing everyone treats as a fixed part of the pipeline turns out to be a bill that only one family of rules runs up.</p>
 <hr />
-<p><em>Part 2 of Section 14. The full script — stage, four hand-differentiated layers, three assignment rules, an exact bipartite matcher and every measurement above — is on <a href="https://github.com/grahamroy/algorithms-in-python">GitHub</a>.</em></p>
-<p><em>Previously: <a href="https://medium.com/@grahamjroy/image-classification-what-a-prior-is-worth-a00de66cfa5e">Image Classification — What a Prior Is Worth</a>, which built the shape world this article extends and measured what a convolution&rsquo;s prior buys at sixty labels. Before that: <a href="https://medium.com/@grahamjroy/fine-tuning-and-lora-the-update-is-not-low-rank-048d50f039aa">Fine-Tuning and LoRA — The Update Is Not Low-Rank</a> and <a href="https://medium.com/@grahamjroy/retrieval-augmented-generation-reading-or-reciting-0686445e3d97">Retrieval-Augmented Generation — Reading or Reciting?</a>.</em></p>
-<p><em>Next, Part 3 — Semantic Segmentation. Assignment dissolves: when every pixel carries its own label the target comes back, handed to you for free. What replaces it is a different problem entirely, because the thing a convolution throws away in order to recognise objects is exactly the thing you now have to give back.</em></p>
+<h2>What comes next</h2>
+<p>Part 3, <strong>Semantic Segmentation</strong>, dissolves the problem this
+article is about. When every pixel carries its own label the
+target comes back, handed to you for free — no rule has to
+invent it, and nothing has to be suppressed afterwards. What
+replaces it is a different difficulty entirely, because the
+thing a convolution throws away in order to recognise an
+object anywhere is exactly the thing you now have to give
+back: where, precisely, it was.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/14-computer-vision/02-object-detection/objdet.py"><strong>objdet.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python objdet.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in about nineteen minutes.
+Everything is from scratch: im2col convolution with channels,
+a shared 1x1 detection head, three assignment rules, greedy
+non-maximum suppression, all-point-interpolated average
+precision and an exact bipartite matcher by shortest
+augmenting paths — all hand-differentiated and audited
+against central differences at startup (worst error 5.198e-09
+over 98 sampled gradients, taken at a generic point because
+on a 97%-empty canvas a zero bias parks 90% of the
+pre-activations exactly on the ReLU kink). Self-tests pin the
+stage&rsquo;s ground truth, both metrics and the matcher before any
+measurement runs. The headline insight worth pinning to the
+wall: <strong>the same network, the same loss and the same budget
+score 0.8458, 0.7438 and 0.4422 depending only on which
+predictor is told to answer for which object — and
+non-maximum suppression, which everyone treats as a fixed
+part of the pipeline, repays the one rule that manufactures
+duplicates by +0.0874 while costing the two that do not
+0.0196 and 0.0212 on every seed, because it was never
+post-processing at all but the repair bill for an assignment
+decision made long before</strong>.</p>
+<hr />
+<p><em>This is Part 2 of the Computer Vision track in the Algorithms in Python series. The companion script <code>objdet.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It extends the &ldquo;shape world&rdquo; stage from <a href="https://medium.com/@grahamjroy/image-classification-what-a-prior-is-worth-a00de66cfa5e">image classification</a>, which measured what a convolution&rsquo;s prior is worth at sixty labels. Earlier in the series: <a href="https://medium.com/@grahamjroy/fine-tuning-and-lora-the-update-is-not-low-rank-048d50f039aa">Fine-Tuning and LoRA — The Update Is Not Low-Rank</a> and <a href="https://medium.com/@grahamjroy/retrieval-augmented-generation-reading-or-reciting-0686445e3d97">Retrieval-Augmented Generation — Reading or Reciting?</a>. Part 3 will look at Semantic Segmentation.</em></p>

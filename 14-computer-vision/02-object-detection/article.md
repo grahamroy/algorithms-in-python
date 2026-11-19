@@ -234,8 +234,54 @@ What does survive the simplification is the shape of the problem. There is no ta
 
 ---
 
-*Part 2 of Section 14. The full script — stage, four hand-differentiated layers, three assignment rules, an exact bipartite matcher and every measurement above — is on [GitHub](https://github.com/grahamroy/algorithms-in-python).*
+## What comes next
 
-*Previously: [Image Classification — What a Prior Is Worth](https://medium.com/@grahamjroy/image-classification-what-a-prior-is-worth-a00de66cfa5e), which built the shape world this article extends and measured what a convolution's prior buys at sixty labels. Before that: [Fine-Tuning and LoRA — The Update Is Not Low-Rank](https://medium.com/@grahamjroy/fine-tuning-and-lora-the-update-is-not-low-rank-048d50f039aa) and [Retrieval-Augmented Generation — Reading or Reciting?](https://medium.com/@grahamjroy/retrieval-augmented-generation-reading-or-reciting-0686445e3d97).*
+Part 3, **Semantic Segmentation**, dissolves the problem this
+article is about. When every pixel carries its own label the
+target comes back, handed to you for free — no rule has to
+invent it, and nothing has to be suppressed afterwards. What
+replaces it is a different difficulty entirely, because the
+thing a convolution throws away in order to recognise an
+object anywhere is exactly the thing you now have to give
+back: where, precisely, it was.
 
-*Next, Part 3 — Semantic Segmentation. Assignment dissolves: when every pixel carries its own label the target comes back, handed to you for free. What replaces it is a different problem entirely, because the thing a convolution throws away in order to recognise objects is exactly the thing you now have to give back.*
+---
+
+## The complete code
+
+The full script is on GitHub — grab it and run it:
+
+[**objdet.py**](https://github.com/grahamroy/algorithms-in-python/blob/main/14-computer-vision/02-object-detection/objdet.py)
+
+Run it with:
+
+```bash
+pip install numpy
+python objdet.py
+```
+
+It needs only `numpy` and runs in about nineteen minutes.
+Everything is from scratch: im2col convolution with channels,
+a shared 1x1 detection head, three assignment rules, greedy
+non-maximum suppression, all-point-interpolated average
+precision and an exact bipartite matcher by shortest
+augmenting paths — all hand-differentiated and audited
+against central differences at startup (worst error 5.198e-09
+over 98 sampled gradients, taken at a generic point because
+on a 97%-empty canvas a zero bias parks 90% of the
+pre-activations exactly on the ReLU kink). Self-tests pin the
+stage's ground truth, both metrics and the matcher before any
+measurement runs. The headline insight worth pinning to the
+wall: **the same network, the same loss and the same budget
+score 0.8458, 0.7438 and 0.4422 depending only on which
+predictor is told to answer for which object — and
+non-maximum suppression, which everyone treats as a fixed
+part of the pipeline, repays the one rule that manufactures
+duplicates by +0.0874 while costing the two that do not
+0.0196 and 0.0212 on every seed, because it was never
+post-processing at all but the repair bill for an assignment
+decision made long before**.
+
+---
+
+*This is Part 2 of the Computer Vision track in the Algorithms in Python series. The companion script `objdet.py` is in the [series repository](https://github.com/grahamroy/algorithms-in-python). It extends the "shape world" stage from [image classification](https://medium.com/@grahamjroy/image-classification-what-a-prior-is-worth-a00de66cfa5e), which measured what a convolution's prior is worth at sixty labels. Earlier in the series: [Fine-Tuning and LoRA — The Update Is Not Low-Rank](https://medium.com/@grahamjroy/fine-tuning-and-lora-the-update-is-not-low-rank-048d50f039aa) and [Retrieval-Augmented Generation — Reading or Reciting?](https://medium.com/@grahamjroy/retrieval-augmented-generation-reading-or-reciting-0686445e3d97). Part 3 will look at Semantic Segmentation.*
