@@ -1,0 +1,109 @@
+<p>![[HEADER]]</p>
+<p>Part 1 of this section measured a convolution&rsquo;s translation invariance and found it was not an approximation. Re-render the same shape at every legal position and the answer never changes: 1.0000, with zero variance across seeds. That exactness is bought by pooling, which is a deliberate destruction of position — and it was the right trade, because the question was <em>what is this</em> and position was the nuisance.</p>
+<p>Part 2 then broke the assumption that there is one thing in the picture, and found that the hard part was inventing a training target where none existed.</p>
+<p>Here the target comes back for free. Every pixel carries a label; nothing has to be assigned, nothing has to be suppressed. What replaces that difficulty is the one Part 1 created: a segmentation head must say where a boundary falls to within a pixel, using features built by throwing away exactly that. U-Net&rsquo;s contribution is a single idea — hand the decoder the encoder&rsquo;s feature map from <em>before</em> the pooling.</p>
+<p>So this script holds the architecture, the parameter count, the optimiser and the budget fixed, and changes only whether that skip exists. And because the stage drew every region, it knows each pixel&rsquo;s exact distance to the nearest boundary, which turns <em>where does the error live</em> from an impression into a measurement.</p>
+<p>Everything below comes from one ~1,000-line NumPy script. No autograd, no frameworks; convolution is <code>im2col</code>, the gradients are hand-derived, and it runs in about twenty-eight minutes.</p>
+<hr />
+<h2>The stage</h2>
+<p>Six filled shapes, one to three per scene, and a label for every pixel.</p>
+<p>![[STAGE]]</p>
+<p>Parts 1 and 2 drew one-pixel strokes. That will not do here: every pixel of a stroke touches a boundary, so <em>where does the error live</em> has no interior to compare against. These shapes are solid, and 0.27 to 0.54 of each one&rsquo;s pixels sit two or more pixels from any edge.</p>
+<p>Two of the six are <strong>pierced</strong> — their solid twin, minus a small central hole.</p>
+<p>![[PAIRS]]</p>
+<p>They have an identical outer silhouette and differ on five pixels at r=4 and thirteen at r=7, all of them near the middle. So a pixel on the <strong>rim</strong> can only be labelled correctly by a model whose receptive field reaches the hole, several pixels away. That makes receptive field something to measure rather than something to assert, and it matters later.</p>
+<p>The labels are not annotations. The script chose each shape&rsquo;s class, centre and radius and <em>then</em> drew the pixels, so every boundary is exact and there is no annotator to disagree with.</p>
+<hr />
+<h2>Why not pixel accuracy</h2>
+<p>Background is <strong>0.8216</strong> of every pixel:</p>
+<pre><code>background      0.8216      diamond         0.0233
+disc            0.0246      pierced disc    0.0265
+square          0.0405      pierced square  0.0436
+triangle        0.0200
+</code></pre>
+<p>A model that says &ldquo;background&rdquo; and nothing else scores 0.8216 pixel accuracy. The same model scores 0.0000 mean IoU, which is the right answer, so mean IoU is what gets reported below. A self-test asserts both, because a metric that rewards the majority answer would quietly flatter every comparison in the article.</p>
+<hr />
+<h2>The same comparison, four different conclusions</h2>
+<p>Here is the result I nearly published, twice.</p>
+<p>![[CURVE TABLE]]</p>
+<p>At 400 steps the skip connection looks essential: 0.4700 against 0.3265, and on a single seed it reads 0.8398 against 0.0289. I wrote that down. Then I gave the loser more budget and the gap collapsed, so I wrote down something more sophisticated — that skips buy <em>optimisation speed</em> rather than final quality.</p>
+<p>Three seeds killed that too. At 800 steps the comparison <strong>reverses</strong>: the encoder-decoder is ahead by 0.0956. At 400 steps the U-Net&rsquo;s three seeds are 0.8398, 0.5149 and 0.0554 — a spread of 0.7844, which is wider than the entire effect being measured.</p>
+<p>Early training here does not measure the architecture. It measures the seed. The only row worth quoting is the last one, where both have converged and the spreads have collapsed to ±0.0268 and ±0.0103: <strong>the skip is worth +0.0639 mean IoU</strong>.</p>
+<p>That is a far smaller claim than the one the first run offered. It is also the only one that survives.</p>
+<hr />
+<h2>Where the difference actually lives</h2>
+<p>Now the measurement this stage exists for. Every foreground pixel has an exact distance to the nearest boundary, so the error can be split by it.</p>
+<p>![[BOUNDARY TABLE]]</p>
+<p>The entire advantage is at distance zero. At the boundary the skip is worth <strong>+0.0816</strong>; the largest difference at any other distance is <strong>0.0036</strong>, twenty-three times smaller, and at three of the five remaining distances the plain encoder-decoder is fractionally <em>ahead</em>.</p>
+<p>This is exactly what the mechanism predicts, and it is satisfying to see it come out so cleanly. Pooling discards position. Only the pixels adjacent to a boundary need position back — an interior pixel is surrounded by its own kind and was never in any difficulty. So a skip connection does not make the network better at segmentation in general. It repairs one specific thing, in one specific band, and leaves everything else where it found it.</p>
+<p>It also closes the thread Part 1 opened. There, pooling bought exact translation invariance and the article called it a good deal. Here the same pooling costs 0.0816 at precisely the pixels where position is the answer, and the skip is what buys it back.</p>
+<hr />
+<h2>Depth, and what it can see</h2>
+<p>Depth buys receptive field: 9 pixels at depth 1, 21 at depth 2, 45 at depth 3. At a fixed parameter budget it is paid for in width, so this is a trade.</p>
+<p>![[DEPTH TABLE]]</p>
+<p>Two things here. First, depth 2 wins — and depth 3 loses at <strong>both</strong> widths that bracket the budget, so the deficit is depth rather than capacity. At 10,962 parameters, more than the winner, it manages 0.4399 with a standard deviation of 0.3422, because one seed collapsed entirely. Squeezing a 32×32 image through a 4×4 bottleneck four channels wide is an optimisation problem as much as a representational one. That echoes Part 1, where a wider-shallower network beat a deeper one at a matched budget; here the optimum is in the middle rather than at the edge.</p>
+<p>Second, and more precisely, the <strong>rim</strong> columns. A rim pixel of a pierced shape is labelled correctly only if the model can see the hole, which is up to r pixels away. Depth 1 has a receptive field of 9 pixels — a radius of 4 — and it behaves exactly as that arithmetic predicts: 0.9766 at r=4, falling to <strong>0.6742</strong> at r=7. Depth 2, with a radius of 10, is flat across the whole range (0.9872 to 0.9803).</p>
+<p>The failure appears precisely where the shape outgrows what the model can see. And it fails in the predicted direction:</p>
+<pre><code>pierced disc    -&gt; most common error 'disc'   0.0904
+pierced square  -&gt; most common error 'square' 0.4054
+</code></pre>
+<p>Each pierced shape is mistaken for its <em>solid twin</em>. The model reports the silhouette it can see and misses the evidence that would change the answer, which is what &ldquo;it cannot see the hole&rdquo; means in practice. A receptive field is not a diagram in a paper; it is a hard limit on which questions a pixel is allowed to have an opinion about.</p>
+<hr />
+<h2>Does re-weighting the loss help?</h2>
+<p>Background outnumbers every real class by more than fifteen to one, so a plain per-pixel loss spends most of its gradient on the easy answer. The standard fix is to weight each class by the inverse of its frequency.</p>
+<pre><code>                    mean IoU          foreground acc
+plain               0.9563 ±0.0268    0.9785 ±0.0134
+inverse frequency   0.9720 ±0.0046    0.9893 ±0.0007
+sqrt inverse        0.9682 ±0.0079    0.9863 ±0.0033
+</code></pre>
+<p>Inverse-frequency weighting is nominally best, by +0.0156 — against plain&rsquo;s own seed spread of 0.0268. That is inside the noise, and so is the foreground-accuracy column. On this stage the schemes cannot be told apart, and naming a winner would be reporting a decimal point.</p>
+<p>The honest reading is that the trick is aimed at a problem of a different size. Fifteen to one is a mild imbalance; the medical segmentation tasks the technique was built for routinely run at hundreds or thousands to one. Part 2 reached the same verdict about down-weighting the no-object term for the same reason, which is worth noticing: both are standard fixes, and this family of stages is too forgiving to show either one working.</p>
+<hr />
+<h2>What it costs</h2>
+<p>![[BIG-O TABLE]]</p>
+<hr />
+<h2>Verification</h2>
+<p>Four self-tests, each guarding a claim the article makes:</p>
+<ul>
+<li><strong>The stage knows what it drew.</strong> Solid shapes carry real interiors; each pierced shape is a strict subset of its twin, differing only within half a radius of the centre.</li>
+<li><strong>The metric cannot be fooled.</strong> Predicting background everywhere gives 0.8216 pixel accuracy and <strong>0.0000</strong> mean IoU. The ground truth against itself gives 1.0000; shifted one pixel sideways, 0.7477.</li>
+<li><strong>The decoder&rsquo;s two new operations are exact.</strong> The nearest-neighbour upsample and its adjoint agree to <strong>0.00e+00</strong>, and max-unpool routes every gradient to exactly one input with the sum preserved.</li>
+<li><strong>The gradients are right</strong>: worst relative error <strong>1.8e-07</strong> over the ReLU network, <strong>2.2e-08</strong> with linear activations.</li>
+</ul>
+<p>That last line took four attempts, and each failure was worth more than the pass.</p>
+<p>The first audit reported 2.6e-03 and looked like a bug in the skip connections. It was not. Isolating the parts showed the convolution, the upsample adjoint and the pooling adjoint were all exact, and a <em>linear</em> version of the whole network — skips included — checked out at 1e-09. The problem was that a ReLU has no derivative at zero, and a central difference that steps across the kink reports a disagreement the backward pass is not responsible for.</p>
+<p>Two further corrections came out of chasing it. &ldquo;Linear activations make the loss smooth&rdquo; is false — max-pool still has a corner wherever two inputs tie for the maximum, which is why the linear error stopped falling as the step size shrank instead of vanishing with it. And on a full 32×32 batch there are roughly 25,000 pre-activations per layer, so the smallest one is near zero by sheer density and <em>no</em> step size avoids both the kink and floating-point roundoff. The audit therefore runs on a small instance, where the margin is 1.8e-04 — nineteen times the step size — and asserts that margin rather than hoping for it.</p>
+<p>There was a fourth, quieter one. With linear activations and unit-scale inputs the logits saturate the softmax, both gradients collapse to roughly zero, and their <em>relative</em> difference reads 0.99 — meaningless rather than wrong. ReLU had been hiding that by clipping.</p>
+<hr />
+<h2>What this does and does not show</h2>
+<p>The stage was built to make one thing visible and deletes a great deal to do it. Regions never overlap, nothing is occluded, there is a single scale, the shapes are convex or nearly so, and the whole world is 32×32 with clean boundaries. Real segmentation spends most of its engineering on exactly what was removed: ambiguous boundaries, thin structures, scale pyramids, and annotations that disagree with each other.</p>
+<p>The measurement that drives this article — error by exact distance to a boundary — is also only available because the script drew the regions. On annotated data that distance inherits every wobble in the annotation, which is precisely the quantity being measured.</p>
+<p>What survives is the shape of the argument. Pooling trades position for invariance; segmentation needs the position back; a skip connection buys it back, in one band, for a measurable amount. And a receptive field is a hard limit on what a pixel can know, visible the moment you build a stage where the answer depends on something far away.</p>
+<hr />
+<h2>What comes next</h2>
+<p>Part 4, <strong>Generative Vision</strong>, turns the question inside out. Every model in this section so far has been handed an image and asked to describe it — a label, a box, a per-pixel map. Next the image is the output, and the loss stops being a comparison against a known answer, because there isn&rsquo;t one: a generated picture is not supposed to match a target, only to belong to a distribution.</p>
+<hr />
+<h2>The complete code</h2>
+<p>The full script is on GitHub — grab it and run it:</p>
+<p><a href="https://github.com/grahamroy/algorithms-in-python/blob/main/14-computer-vision/03-semantic-segmentation/segment.py"><strong>segment.py</strong></a></p>
+<p>Run it with:</p>
+<pre><code class="language-bash">pip install numpy
+python segment.py
+</code></pre>
+<p>It needs only <code>numpy</code> and runs in about twenty-eight minutes.
+Everything is from scratch: im2col convolution, max-pooling and
+its adjoint, parameter-free nearest-neighbour upsampling, skip
+concatenation, a per-pixel softmax cross-entropy and an exact
+4-connected boundary-distance transform — all hand-differentiated
+and audited at startup against central differences on a small
+instance whose ReLU margin is asserted, not assumed. The headline
+insight worth pinning to the wall: <strong>a skip connection is worth
++0.0639 mean IoU at convergence and +0.0816 at the boundary, while
+the largest difference it makes at any other distance is 0.0036 —
+so it does not make a network better at segmentation, it repairs
+one band of pixels whose position pooling threw away; and the same
+comparison read at 400 steps says skips are essential, at 800 steps
+says they are harmful, and only at convergence says anything
+true at all</strong>.</p>
+<hr />
+<p><em>This is Part 3 of the Computer Vision track in the Algorithms in Python series. The companion script <code>segment.py</code> is in the <a href="https://github.com/grahamroy/algorithms-in-python">series repository</a>. It extends the stage from <a href="https://medium.com/@grahamjroy/image-classification-what-a-prior-is-worth-a00de66cfa5e">image classification</a>, whose exact translation-invariance measurement this article is the other half of, and follows Part 2 on object detection. Part 4 will look at Generative Vision.</em></p>

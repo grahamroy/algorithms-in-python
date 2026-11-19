@@ -168,7 +168,7 @@ clear explanations and Python implementations.
 |---|-----------|--------|
 | 1 | Image Classification (ResNet / EfficientNet / ViT) | ✅ |
 | 2 | Object Detection (YOLO / R-CNN family) | ✅ |
-| 3 | Semantic Segmentation (U-Net) | ⬜ |
+| 3 | Semantic Segmentation (U-Net) | ✅ |
 | 4 | Generative Vision (StyleGAN / Stable Diffusion) | ⬜ |
 | 5 | Spiking Neural Networks | ⬜ |
 
