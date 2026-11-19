@@ -15,12 +15,7 @@
 <p>The labels are not annotations. The script chose each shape&rsquo;s class, centre and radius and <em>then</em> drew the pixels, so every boundary is exact and there is no annotator to disagree with.</p>
 <hr />
 <h2>Why not pixel accuracy</h2>
-<p>Background is <strong>0.8216</strong> of every pixel:</p>
-<pre><code>background      0.8216      diamond         0.0233
-disc            0.0246      pierced disc    0.0265
-square          0.0405      pierced square  0.0436
-triangle        0.0200
-</code></pre>
+<p>Background is <strong>0.8216</strong> of every pixel. The six real classes split the remainder between them, none of them larger than 0.0436 (pierced square) and none smaller than 0.0200 (triangle) — so background outnumbers the commonest shape by nearly nineteen to one, and the rarest by more than forty.</p>
 <p>A model that says &ldquo;background&rdquo; and nothing else scores 0.8216 pixel accuracy. The same model scores 0.0000 mean IoU, which is the right answer, so mean IoU is what gets reported below. A self-test asserts both, because a metric that rewards the majority answer would quietly flatter every comparison in the article.</p>
 <hr />
 <h2>The same comparison, four different conclusions</h2>
@@ -43,19 +38,11 @@ triangle        0.0200
 <p>![[DEPTH TABLE]]</p>
 <p>Two things here. First, depth 2 wins — and depth 3 loses at <strong>both</strong> widths that bracket the budget, so the deficit is depth rather than capacity. At 10,962 parameters, more than the winner, it manages 0.4399 with a standard deviation of 0.3422, because one seed collapsed entirely. Squeezing a 32×32 image through a 4×4 bottleneck four channels wide is an optimisation problem as much as a representational one. That echoes Part 1, where a wider-shallower network beat a deeper one at a matched budget; here the optimum is in the middle rather than at the edge.</p>
 <p>Second, and more precisely, the <strong>rim</strong> columns. A rim pixel of a pierced shape is labelled correctly only if the model can see the hole, which is up to r pixels away. Depth 1 has a receptive field of 9 pixels — a radius of 4 — and it behaves exactly as that arithmetic predicts: 0.9766 at r=4, falling to <strong>0.6742</strong> at r=7. Depth 2, with a radius of 10, is flat across the whole range (0.9872 to 0.9803).</p>
-<p>The failure appears precisely where the shape outgrows what the model can see. And it fails in the predicted direction:</p>
-<pre><code>pierced disc    -&gt; most common error 'disc'   0.0904
-pierced square  -&gt; most common error 'square' 0.4054
-</code></pre>
-<p>Each pierced shape is mistaken for its <em>solid twin</em>. The model reports the silhouette it can see and misses the evidence that would change the answer, which is what &ldquo;it cannot see the hole&rdquo; means in practice. A receptive field is not a diagram in a paper; it is a hard limit on which questions a pixel is allowed to have an opinion about.</p>
+<p>The failure appears precisely where the shape outgrows what the model can see. And it fails in the predicted direction: at r=7 the shallow model&rsquo;s commonest error on a pierced disc is to call it a <strong>disc</strong> (0.0904 of its rim pixels), and on a pierced square to call it a <strong>square</strong> (0.4054). In both cases the most frequent mistake is the shape&rsquo;s <em>solid twin</em>. The model reports the silhouette it can see and misses the evidence that would change the answer, which is what &ldquo;it cannot see the hole&rdquo; means in practice. A receptive field is not a diagram in a paper; it is a hard limit on which questions a pixel is allowed to have an opinion about.</p>
 <hr />
 <h2>Does re-weighting the loss help?</h2>
 <p>Background outnumbers every real class by more than fifteen to one, so a plain per-pixel loss spends most of its gradient on the easy answer. The standard fix is to weight each class by the inverse of its frequency.</p>
-<pre><code>                    mean IoU          foreground acc
-plain               0.9563 ±0.0268    0.9785 ±0.0134
-inverse frequency   0.9720 ±0.0046    0.9893 ±0.0007
-sqrt inverse        0.9682 ±0.0079    0.9863 ±0.0033
-</code></pre>
+<p>![[WEIGHTING TABLE]]</p>
 <p>Inverse-frequency weighting is nominally best, by +0.0156 — against plain&rsquo;s own seed spread of 0.0268. That is inside the noise, and so is the foreground-accuracy column. On this stage the schemes cannot be told apart, and naming a winner would be reporting a decimal point.</p>
 <p>The honest reading is that the trick is aimed at a problem of a different size. Fifteen to one is a mild imbalance; the medical segmentation tasks the technique was built for routinely run at hundreds or thousands to one. Part 2 reached the same verdict about down-weighting the no-object term for the same reason, which is worth noticing: both are standard fixes, and this family of stages is too forgiving to show either one working.</p>
 <hr />

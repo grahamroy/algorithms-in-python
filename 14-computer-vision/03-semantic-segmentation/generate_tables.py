@@ -120,7 +120,36 @@ def table_depth():
     assert float(rows[1][8]) > 0.95, "depth 2 must not"
 
 
+# =====================================================================
+# Measurement 5 -- class re-weighting.
+# =====================================================================
+def table_weighting():
+    rows = [
+        ["plain cross-entropy", "0.9563 ±0.0268", "0.9785 ±0.0134",
+         "the baseline"],
+        ["inverse frequency", "0.9720 ±0.0046", "0.9893 ±0.0007",
+         "+0.0156, inside the noise"],
+        ["sqrt inverse frequency", "0.9682 ±0.0079",
+         "0.9863 ±0.0033", "+0.0119, inside the noise"],
+    ]
+    render("weighting_table.png",
+           "Three ways to weight an imbalanced loss",
+           ["Loss weighting", "mean IoU", "Foreground\naccuracy",
+            "Verdict"],
+           rows, [7.6, 5.4, 5.4, 7.2],
+           ["l", "c", "c", "l"],
+           [TEXT, TEXT, TEXT, NOTE_C],
+           footnote="U-Net, 1600 steps, 3 seeds. The best scheme beats "
+                    "plain by +0.0156 against plain's own seed spread "
+                    "of 0.0268 — so on this stage the schemes "
+                    "cannot be told apart, and naming a winner would "
+                    "be reporting a decimal point.")
+    gap = 0.9720 - 0.9563
+    assert gap < 0.0268, "the whole point is that the gap is smaller"
+
+
 if __name__ == "__main__":
     table_curve()
     table_boundary()
     table_depth()
+    table_weighting()

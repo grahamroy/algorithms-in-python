@@ -36,14 +36,7 @@ The labels are not annotations. The script chose each shape's class, centre and 
 
 ## Why not pixel accuracy
 
-Background is **0.8216** of every pixel:
-
-```
-background      0.8216      diamond         0.0233
-disc            0.0246      pierced disc    0.0265
-square          0.0405      pierced square  0.0436
-triangle        0.0200
-```
+Background is **0.8216** of every pixel. The six real classes split the remainder between them, none of them larger than 0.0436 (pierced square) and none smaller than 0.0200 (triangle) — so background outnumbers the commonest shape by nearly nineteen to one, and the rarest by more than forty.
 
 A model that says "background" and nothing else scores 0.8216 pixel accuracy. The same model scores 0.0000 mean IoU, which is the right answer, so mean IoU is what gets reported below. A self-test asserts both, because a metric that rewards the majority answer would quietly flatter every comparison in the article.
 
@@ -89,14 +82,7 @@ Two things here. First, depth 2 wins — and depth 3 loses at **both** widths th
 
 Second, and more precisely, the **rim** columns. A rim pixel of a pierced shape is labelled correctly only if the model can see the hole, which is up to r pixels away. Depth 1 has a receptive field of 9 pixels — a radius of 4 — and it behaves exactly as that arithmetic predicts: 0.9766 at r=4, falling to **0.6742** at r=7. Depth 2, with a radius of 10, is flat across the whole range (0.9872 to 0.9803).
 
-The failure appears precisely where the shape outgrows what the model can see. And it fails in the predicted direction:
-
-```
-pierced disc    -> most common error 'disc'   0.0904
-pierced square  -> most common error 'square' 0.4054
-```
-
-Each pierced shape is mistaken for its *solid twin*. The model reports the silhouette it can see and misses the evidence that would change the answer, which is what "it cannot see the hole" means in practice. A receptive field is not a diagram in a paper; it is a hard limit on which questions a pixel is allowed to have an opinion about.
+The failure appears precisely where the shape outgrows what the model can see. And it fails in the predicted direction: at r=7 the shallow model's commonest error on a pierced disc is to call it a **disc** (0.0904 of its rim pixels), and on a pierced square to call it a **square** (0.4054). In both cases the most frequent mistake is the shape's *solid twin*. The model reports the silhouette it can see and misses the evidence that would change the answer, which is what "it cannot see the hole" means in practice. A receptive field is not a diagram in a paper; it is a hard limit on which questions a pixel is allowed to have an opinion about.
 
 ---
 
@@ -104,12 +90,7 @@ Each pierced shape is mistaken for its *solid twin*. The model reports the silho
 
 Background outnumbers every real class by more than fifteen to one, so a plain per-pixel loss spends most of its gradient on the easy answer. The standard fix is to weight each class by the inverse of its frequency.
 
-```
-                    mean IoU          foreground acc
-plain               0.9563 ±0.0268    0.9785 ±0.0134
-inverse frequency   0.9720 ±0.0046    0.9893 ±0.0007
-sqrt inverse        0.9682 ±0.0079    0.9863 ±0.0033
-```
+![[WEIGHTING TABLE]]
 
 Inverse-frequency weighting is nominally best, by +0.0156 — against plain's own seed spread of 0.0268. That is inside the noise, and so is the foreground-accuracy column. On this stage the schemes cannot be told apart, and naming a winner would be reporting a decimal point.
 
